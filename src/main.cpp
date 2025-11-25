@@ -123,6 +123,39 @@ int main(int argc, char* argv[]) {
     
     // Setup camera
     Camera camera(Vec3(0, 0, 0), Vec3(0, 0, -1), 60);
+
+    // Clear any existing objects (if needed)
+    scene.spheres.clear();
+    scene.lights.clear();
+
+// Ground sphere (large, matte gray)
+    scene.spheres.push_back(Sphere(Vec3(0, -1002, -20), 1000, 
+        Material{Vec3(0.5, 0.5, 0.5), 0.0, 10}));
+
+// Center sphere (shiny red)
+    scene.spheres.push_back(Sphere(Vec3(0, 0, -20), 2, 
+        Material{Vec3(1, 0.2, 0.2), 0.3, 50}));
+
+// Left sphere (highly reflective, mirror-like)
+    scene.spheres.push_back(Sphere(Vec3(-5, 0, -18), 2, 
+        Material{Vec3(0.8, 0.8, 0.8), 0.9, 100}));
+
+// Right sphere (matte blue)
+    scene.spheres.push_back(Sphere(Vec3(5, 0, -22), 2, 
+        Material{Vec3(0.2, 0.3, 1.0), 0.1, 20}));
+
+// Small foreground sphere (shiny green)
+    scene.spheres.push_back(Sphere(Vec3(2, -1, -15), 1, 
+        Material{Vec3(0.2, 0.9, 0.3), 0.4, 80}));
+
+// Background sphere (purple, semi-reflective)
+    scene.spheres.push_back(Sphere(Vec3(-3, 2, -25), 3, 
+        Material{Vec3(0.7, 0.2, 0.8), 0.5, 60}));
+
+// Multiple lights for more interesting shadows
+scene.lights.push_back(Light{Vec3(10, 10, -5), Vec3(1, 1, 1), 0.8});      // Main light (white)
+scene.lights.push_back(Light{Vec3(-10, 5, -10), Vec3(0.3, 0.3, 0.5), 0.4}); // Fill light (bluish)
+scene.lights.push_back(Light{Vec3(0, 15, -20), Vec3(1, 0.9, 0.8), 0.3});   // Top light (warm)
     
     // Framebuffer
     std::vector<Vec3> framebuffer(width * height);
