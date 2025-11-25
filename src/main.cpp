@@ -2,12 +2,14 @@
 #include <fstream>
 #include <vector>
 #include <chrono>
+#include <algorithm>
+#include <cmath>
 #include <omp.h>
 #include "vec3.h"
 #include "ray.h"
 #include "sphere.h"
 #include "scene.h"
-#include <math_constants.h>
+#include "math_constants.h"
 
 class Camera {
 public:
@@ -52,8 +54,36 @@ Vec3 trace_ray(const Ray& ray, const Scene& scene, int depth) {
     // 2. Call scene.shade() for color
     // 3. If material is reflective, recursively trace reflection ray
     // YOUR CODE HERE
+    Vec3 hit_point = ray.at(t);
     
-    return Vec3(1, 0, 1);  // Placeholder magenta
+    // Get the sphere and calculate normal
+    const Sphere& sphere = scene.spheres[sphere_idx];
+    Vec3 normal = sphere.normal_at(hit_point);
+    
+    // Calculate view direction (from hit point to camera)
+    Vec3 view_dir = (ray.origin - hit_point).normalized();
+    
+    // Get material and calculate base color with shading
+    const Material& mat = sphere.material;
+    Vec3 color = scene.shade(hit_point, normal, mat, view_dir);
+    
+    // Handle reflections if material is reflective
+    if (mat.reflectivity > 0.0 && depth > 1) {
+        // Calculate reflection direction: R = V - 2*(V·N)*N
+        Vec3 reflect_dir = view_dir - normal * (2.0 * dot(view_dir, normal));
+        
+        // Offset reflection ray origin to avoid self-intersection
+        Vec3 offset_origin = hit_point + normal * EPSILON;
+        Ray reflect_ray(offset_origin, reflect_dir);
+        
+        // Recursively trace reflection ray
+        Vec3 reflect_color = trace_ray(reflect_ray, scene, depth - 1);
+        
+        // Blend base color with reflection
+        color = color * (1.0 - mat.reflectivity) + reflect_color * mat.reflectivity;
+    }
+    
+    return color;
 }
 
 // Write image to PPM file
@@ -84,12 +114,12 @@ int main(int argc, char* argv[]) {
     
     // TODO: STUDENT - Add spheres to scene
     // Example:
-    // scene.spheres.push_back(Sphere(Vec3(0, 0, -20), 2, 
-    //     Material{Vec3(1, 0, 0), 0.5, 50}));
+    scene.spheres.push_back(Sphere(Vec3(0, 0, -20), 2, 
+         Material{Vec3(1, 0, 0), 0.5, 50}));
     
     // TODO: STUDENT - Add lights to scene
     // Example:
-    // scene.lights.push_back(Light{Vec3(10, 10, -10), Vec3(1, 1, 1), 1.0});
+    scene.lights.push_back(Light{Vec3(10, 10, -10), Vec3(1, 1, 1), 1.0});
     
     // Setup camera
     Camera camera(Vec3(0, 0, 0), Vec3(0, 0, -1), 60);
