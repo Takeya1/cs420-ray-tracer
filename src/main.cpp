@@ -191,6 +191,17 @@ scene.lights.push_back(Light{Vec3(0, 15, -20), Vec3(1, 0.9, 0.8), 0.3});   // To
     
     // YOUR OPENMP CODE HERE
     // Hint: Use #pragma omp parallel for with appropriate scheduling
+    #pragma omp parallel for schedule (dynamic, 8)
+    for (int j = 0; j < height; j++){
+        for (int i = 0; i < width; i++){
+            double u = double(i) / (width - 1);
+            double v = double(j) / (height - 1);
+            
+            Ray ray = camera.get_ray(u,v);
+            framebuffer[j * width + i] = trace_ray(ray, scene, max_depth);
+        }
+    }
+
     
     end = std::chrono::high_resolution_clock::now();
     diff = end - start;

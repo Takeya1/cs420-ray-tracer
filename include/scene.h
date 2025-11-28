@@ -31,12 +31,12 @@ public:
         // Loop through all spheres and find the closest intersection
 
         // YOUR CODE HERE
-        for (int i = 0; i < spheres.size(); i++) {
+        for (size_t i = 0; i < spheres.size(); i++) {
             double t_temp;
             if(spheres[i].intersect(ray, t_temp)) {
                 if(t_temp < t) {
                     t = t_temp;
-                    sphere_idx = i;
+                    sphere_idx = static_cast<int>(i);
                 }
             }
         }
