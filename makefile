@@ -1,6 +1,6 @@
 CXX = g++
 CXXFLAGS = -std=c++11 -O3 -Wall
-OMPFLAGS = -fopenmp
+OMPFLAGS = -Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include -L/opt/homebrew/opt/libomp/lib -lomp
 NVCC = nvcc
 CUDAFLAGS = -O3 -arch=sm_60
 
@@ -32,7 +32,7 @@ hybrid: $(SRCDIR)/main_hybrid.cpp $(SRCDIR)/kernel.cu
 	$(NVCC) $(CUDAFLAGS) kernel.o main_hybrid.o -o ray_hybrid
 
 clean:
-	rm -f ray_serial ray_openmp ray_cuda ray_hybrid *.o *.ppm
+	rm -f ray_serial ray_openmp ray_cuda ray_hybrid *.o *.ppm *.png
 
 test: serial
 	./ray_serial
@@ -42,3 +42,5 @@ benchmark: serial openmp
 	@echo "=== Performance Comparison ==="
 	@echo -n "Serial: "; ./ray_serial | grep "Serial time"
 	@echo -n "OpenMP: "; ./ray_openmp | grep "OpenMP time"
+	convert output_serial.ppm output_serial.png
+	convert output_openmp.ppm output_openmp.png

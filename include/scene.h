@@ -101,6 +101,7 @@ public:
             double r_dot_v = std::max(0.0, dot(reflect_dir, view_dir));
             double specular_factor = pow(r_dot_v, mat.shininess);
             Vec3 specular = light.color * light.intensity * specular_factor * (1.0 - mat.reflectivity);
+           
             
             // Add diffuse and specular contributions
             color = color + diffuse + specular;
