@@ -11,6 +11,7 @@
 #include "ray.h"
 #include "sphere.h"
 #include "scene.h"
+#include "scene_loader.h"
 #include "math_constants.h"
 
 class Camera {
@@ -106,6 +107,93 @@ void write_ppm(const std::string& filename, const std::vector<Vec3>& framebuffer
         }
     }
 }
+void create_test_scene(Scene& scene) {
+    // =========================================================================
+    // SPHERES
+    // =========================================================================
+    
+    // Ground "plane" - a very large sphere beneath the scene
+    // Center is far below (y = -102) so only the top surface is visible
+    scene.spheres.push_back(Sphere(
+        Vec3(0, -102, -20),           // Center: far below the scene
+        100,                          // Radius: very large
+        Material{Vec3(0.5, 0.5, 0.5), 0.0, 10}  // Gray, non-reflective
+    ));
+    
+    // Large red sphere (left) - diffuse material
+    scene.spheres.push_back(Sphere(
+        Vec3(-4, 0, -20),             // Left of center
+        2.5,                          // Medium size
+        Material{Vec3(0.9, 0.2, 0.2), 0.1, 30}  // Red, slightly reflective
+    ));
+    
+    // Large green sphere (center) - semi-reflective
+    scene.spheres.push_back(Sphere(
+        Vec3(0, 0, -20),              // Center
+        2.5,                          // Medium size
+        Material{Vec3(0.2, 0.8, 0.2), 0.3, 50}  // Green, moderately reflective
+    ));
+    
+    // Large blue sphere (right) - more reflective
+    scene.spheres.push_back(Sphere(
+        Vec3(4, 0, -20),              // Right of center
+        2.5,                          // Medium size
+        Material{Vec3(0.2, 0.2, 0.9), 0.5, 80}  // Blue, fairly reflective
+    ));
+    
+    // Small white sphere (front) - highly reflective (mirror-like)
+    scene.spheres.push_back(Sphere(
+        Vec3(0, -1, -12),             // In front, slightly lower
+        1.0,                          // Small
+        Material{Vec3(0.9, 0.9, 0.9), 0.9, 200} // White, very reflective (mirror)
+    ));
+    
+    // Small yellow sphere (back left)
+    scene.spheres.push_back(Sphere(
+        Vec3(-2, 1.5, -25),           // Back left, elevated
+        1.5,                          // Small-medium
+        Material{Vec3(0.9, 0.9, 0.2), 0.2, 40}  // Yellow
+    ));
+    
+    // Small cyan sphere (back right)
+    scene.spheres.push_back(Sphere(
+        Vec3(3, 2, -28),              // Back right, elevated
+        1.5,                          // Small-medium
+        Material{Vec3(0.2, 0.9, 0.9), 0.2, 40}  // Cyan
+    ));
+    
+    // =========================================================================
+    // LIGHTS
+    // =========================================================================
+    
+    // Main key light (upper right, warm white)
+    Light key_light;
+    key_light.position = Vec3(10, 10, -5);
+    key_light.color = Vec3(1.0, 0.95, 0.9);   // Slightly warm white
+    key_light.intensity = 0.8;
+    scene.lights.push_back(key_light);
+    
+    // Fill light (upper left, cool blue)
+    // Provides softer illumination on the shadow side
+    Light fill_light;
+    fill_light.position = Vec3(-10, 8, -5);
+    fill_light.color = Vec3(0.8, 0.9, 1.0);   // Slightly cool/blue
+    fill_light.intensity = 0.4;
+    scene.lights.push_back(fill_light);
+    
+    // Rim light (behind, adds edge definition)
+    Light rim_light;
+    rim_light.position = Vec3(0, 5, -35);
+    rim_light.color = Vec3(1.0, 1.0, 1.0);
+    rim_light.intensity = 0.3;
+    scene.lights.push_back(rim_light);
+    
+    // =========================================================================
+    // AMBIENT LIGHT
+    // =========================================================================
+    // Low ambient prevents completely black shadows
+    scene.ambient_light = Vec3(0.1, 0.1, 0.12);  // Slightly blue ambient
+}
 
 int main(int argc, char* argv[]) {
     // Image settings
@@ -115,7 +203,36 @@ int main(int argc, char* argv[]) {
     
     // Create scene
     Scene scene;
+    SceneData scene_data;
+    std::string scene_file = "scenes/simple.txt";
     
+    // Allow command-line scene selection
+    if (argc > 1) {
+        scene_file = argv[1];
+    }
+    
+    std::cout << "Testing scene loader with: " << scene_file << "\n\n";
+    // Load the scene
+    scene_data = load_scene(scene_file);
+    scene = scene_data.scene;
+    
+    // Print detailed info
+    print_scene_info(scene_data);
+    
+    // =========================================================================
+    // Setup camera
+    // =========================================================================
+    // Camera positioned at origin, looking into the scene (negative Z)
+    // Camera camera(
+    //     Vec3(0, 2, 5),       // Position: slightly above origin, in front of scene
+    //     Vec3(0, 0, -20),     // Look at: center of the sphere arrangement
+    //     60                   // Field of view: 60 degrees
+    // );
+    Camera camera(
+        scene_data.camera.position,
+        scene_data.camera.look_at,
+        scene_data.camera.fov
+    );
     // TODO: STUDENT - Add spheres to scene
     // Example:
     scene.spheres.push_back(Sphere(Vec3(0, 0, -20), 2, 
