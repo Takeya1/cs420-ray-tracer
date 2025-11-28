@@ -1,6 +1,16 @@
 CXX = g++
 CXXFLAGS = -std=c++11 -O3 -Wall
-OMPFLAGS = -Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include -L/opt/homebrew/opt/libomp/lib -lomp
+
+# Detect OS and set appropriate OpenMP flags
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+    # macOS - requires libomp from Homebrew
+    OMPFLAGS = -Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include -L/opt/homebrew/opt/libomp/lib -lomp
+else
+    # Linux - simple flag
+    OMPFLAGS = -fopenmp
+endif
+
 NVCC = nvcc
 CUDAFLAGS = -O3 -arch=sm_60
 
