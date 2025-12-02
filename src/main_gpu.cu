@@ -15,6 +15,20 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+// Define CUDA math constants if not already defined (for compatibility with older CUDA versions)
+#ifndef CUDART_PI
+#define CUDART_PI 3.1415926535897931e+0
+#endif
+#ifndef CUDART_THIRD
+#define CUDART_THIRD 3.3333333333333333e-1
+#endif
+#ifndef CUDART_SQRT_HALF_HI
+#define CUDART_SQRT_HALF_HI 7.0710678118654757e-1
+#endif
+#ifndef CUDART_SQRT_HALF_LO
+#define CUDART_SQRT_HALF_LO (-1.7171281366606629e-17)
+#endif
+
 // CUDA error checking macro
 #define CUDA_CHECK(call) \
     do { \
@@ -31,40 +45,40 @@
 // =========================================================
 
 struct float3_ops {
-    __device__ static float3 make(float x, float y, float z) {
+    __host__ __device__ static float3 make(float x, float y, float z) {
         return make_float3(x, y, z);
     }
-    
-    __device__ static float3 add(const float3& a, const float3& b) {
+
+    __host__ __device__ static float3 add(const float3& a, const float3& b) {
         return make_float3(a.x + b.x, a.y + b.y, a.z + b.z);
     }
-    
-    __device__ static float3 sub(const float3& a, const float3& b) {
+
+    __host__ __device__ static float3 sub(const float3& a, const float3& b) {
         return make_float3(a.x - b.x, a.y - b.y, a.z - b.z);
     }
-    
-    __device__ static float3 mul(const float3& a, float t) {
+
+    __host__ __device__ static float3 mul(const float3& a, float t) {
         return make_float3(a.x * t, a.y * t, a.z * t);
     }
-    
-    __device__ static float dot(const float3& a, const float3& b) {
+
+    __host__ __device__ static float dot(const float3& a, const float3& b) {
         return a.x * b.x + a.y * b.y + a.z * b.z;
     }
-    
-    __device__ static float length(const float3& v) {
+
+    __host__ __device__ static float length(const float3& v) {
         return sqrtf(dot(v, v));
     }
-    
-    __device__ static float3 normalize(const float3& v) {
+
+    __host__ __device__ static float3 normalize(const float3& v) {
         float len = length(v);
         return make_float3(v.x/len, v.y/len, v.z/len);
     }
-    
-    __device__ static float3 reflect(const float3& v, const float3& n) {
+
+    __host__ __device__ static float3 reflect(const float3& v, const float3& n) {
         return sub(v, mul(n, 2.0f * dot(v, n)));
     }
-    
-    __device__ static float3 lerp(const float3& a, const float3& b, float t) {
+
+    __host__ __device__ static float3 lerp(const float3& a, const float3& b, float t) {
         return add(mul(a, 1.0f - t), mul(b, t));
     }
 };
@@ -96,11 +110,37 @@ struct GPUSphere {
     
     // ===== TODO: STUDENT - IMPLEMENT GPU SPHERE INTERSECTION =====
     __device__ bool intersect(const GPURay& ray, float t_min, float t_max, float& t) const {
-        // TODO: Implement ray-sphere intersection on GPU
-        // Same algorithm as CPU version but using float3 operations
-        
-        // PLACEHOLDER
-        return false;
+        // Vector from ray origin to sphere center
+        float3 oc = float3_ops::sub(ray.origin, center);
+
+        // Quadratic equation coefficients: at^2 + bt + c = 0
+        float a = float3_ops::dot(ray.direction, ray.direction);
+        float b = 2.0f * float3_ops::dot(oc, ray.direction);
+        float c = float3_ops::dot(oc, oc) - radius * radius;
+
+        // Discriminant
+        float discriminant = b * b - 4.0f * a * c;
+
+        // No intersection if discriminant is negative
+        if (discriminant < 0.0f) {
+            return false;
+        }
+
+        // Calculate the nearest intersection point
+        float sqrt_discriminant = sqrtf(discriminant);
+        float temp = (-b - sqrt_discriminant) / (2.0f * a);
+
+        // Check if nearest intersection is in valid range
+        if (temp < t_min || temp > t_max) {
+            // Try the other root
+            temp = (-b + sqrt_discriminant) / (2.0f * a);
+            if (temp < t_min || temp > t_max) {
+                return false;
+            }
+        }
+
+        t = temp;
+        return true;
     }
     
     __device__ float3 normal_at(const float3& point) const {
@@ -163,26 +203,99 @@ __global__ void render_kernel(float3* framebuffer,
     // Calculate pixel coordinates
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-    
+
     if (x >= width || y >= height) return;
-    
-    // TODO: STUDENT CODE HERE
-    // Steps:
+
     // 1. Generate ray for this pixel
+    float u = float(x) / float(width - 1);
+    float v = float(y) / float(height - 1);
+    GPURay ray = camera.get_ray(u, v);
+
     // 2. Initialize color accumulator and attenuation
-    // 3. Iterative ray bouncing (instead of recursion):
-    //    for (int bounce = 0; bounce < max_bounces; bounce++) {
-    //        a. Find intersection
-    //        b. If no hit, add background color and break
-    //        c. Calculate shading (ambient + diffuse + specular)
-    //        d. If reflective, setup ray for next bounce
-    //        e. Accumulate color with attenuation
-    //    }
+    float3 color = make_float3(0.0f, 0.0f, 0.0f);
+    float3 attenuation = make_float3(1.0f, 1.0f, 1.0f);
+
+    // 3. Iterative ray bouncing (no recursion on GPU!)
+    for (int bounce = 0; bounce < max_bounces; bounce++) {
+        // a. Find closest intersection
+        float closest_t = 1e10f;
+        int hit_idx = -1;
+
+        for (int i = 0; i < num_spheres; i++) {
+            float t;
+            if (spheres[i].intersect(ray, 0.001f, closest_t, t)) {
+                closest_t = t;
+                hit_idx = i;
+            }
+        }
+
+        // b. If no hit, add background color and break
+        if (hit_idx < 0) {
+            // Sky gradient background
+            float t = 0.5f * (ray.direction.y + 1.0f);
+            float3 bg = float3_ops::lerp(
+                make_float3(1.0f, 1.0f, 1.0f),
+                make_float3(0.5f, 0.7f, 1.0f),
+                t
+            );
+            color.x += bg.x * attenuation.x;
+            color.y += bg.y * attenuation.y;
+            color.z += bg.z * attenuation.z;
+            break;
+        }
+
+        // c. Calculate shading (ambient + diffuse + specular)
+        float3 hit_point = ray.at(closest_t);
+        float3 normal = spheres[hit_idx].normal_at(hit_point);
+        GPUMaterial mat = spheres[hit_idx].material;
+
+        // Start with ambient lighting
+        float3 shading = make_float3(0.1f, 0.1f, 0.1f);
+
+        // Add contribution from each light
+        for (int l = 0; l < num_lights; l++) {
+            float3 light_dir = float3_ops::normalize(
+                float3_ops::sub(lights[l].position, hit_point)
+            );
+
+            // Diffuse lighting
+            float diff = fmaxf(0.0f, float3_ops::dot(normal, light_dir));
+            float3 diffuse = float3_ops::mul(lights[l].color, diff * lights[l].intensity);
+
+            // Specular lighting (Blinn-Phong)
+            float3 view_dir = float3_ops::normalize(float3_ops::mul(ray.direction, -1.0f));
+            float3 half_dir = float3_ops::normalize(float3_ops::add(light_dir, view_dir));
+            float spec = powf(fmaxf(0.0f, float3_ops::dot(normal, half_dir)), mat.shininess);
+            float3 specular = float3_ops::mul(lights[l].color, spec * lights[l].intensity * mat.metallic);
+
+            shading = float3_ops::add(shading, float3_ops::add(diffuse, specular));
+        }
+
+        // Apply material albedo
+        shading.x *= mat.albedo.x;
+        shading.y *= mat.albedo.y;
+        shading.z *= mat.albedo.z;
+
+        // e. Accumulate color with attenuation
+        color.x += shading.x * attenuation.x;
+        color.y += shading.y * attenuation.y;
+        color.z += shading.z * attenuation.z;
+
+        // d. If reflective, setup ray for next bounce
+        if (mat.metallic > 0.01f && bounce < max_bounces - 1) {
+            ray.origin = hit_point;
+            ray.direction = float3_ops::reflect(ray.direction, normal);
+            attenuation.x *= mat.metallic;
+            attenuation.y *= mat.metallic;
+            attenuation.z *= mat.metallic;
+        } else {
+            break;
+        }
+    }
+
     // 4. Store final color in framebuffer
-    
-    // PLACEHOLDER - Just set to red for now
     int pixel_idx = y * width + x;
-    framebuffer[pixel_idx] = make_float3(1.0f, 0.0f, 0.0f);
+    framebuffer[pixel_idx] = color;
 }
 
 // =========================================================
@@ -294,19 +407,66 @@ int main(int argc, char* argv[]) {
     
     // ===== TODO: STUDENT - CREATE GPU SCENE =====
     // Add spheres (aim for 50-100 for GPU testing)
-    
-    // Example spheres
+
+    // Ground plane (large sphere below)
+    h_spheres.push_back({
+        make_float3(0, -1000, -20), 998.0f,
+        {make_float3(0.5f, 0.5f, 0.5f), 0.0f, 1.0f, 10.0f}
+    });
+
+    // Center spheres - different materials
     h_spheres.push_back({
         make_float3(0, 0, -20), 2.0f,
-        {make_float3(1, 0, 0), 0.0f, 1.0f, 10.0f}
+        {make_float3(1.0f, 0.3f, 0.3f), 0.0f, 0.8f, 10.0f}  // Diffuse red
     });
-    
+
     h_spheres.push_back({
-        make_float3(3, 0, -20), 2.0f,
-        {make_float3(0.8f, 0.8f, 0.8f), 0.8f, 0.2f, 100.0f}
+        make_float3(4, 0, -20), 1.5f,
+        {make_float3(0.8f, 0.8f, 0.8f), 0.9f, 0.1f, 200.0f}  // Metallic
     });
-    
-    // TODO: Add many more spheres (use loops to create patterns)
+
+    h_spheres.push_back({
+        make_float3(-4, 0, -20), 1.5f,
+        {make_float3(0.3f, 0.3f, 1.0f), 0.3f, 0.5f, 50.0f}  // Semi-metallic blue
+    });
+
+    // Create a grid of smaller spheres
+    for (int i = -3; i <= 3; i++) {
+        for (int j = -2; j <= 2; j++) {
+            float x = i * 3.0f;
+            float y = j * 2.5f + 1.0f;
+            float z = -25.0f - (i * i + j * j) * 0.5f;
+
+            // Vary colors based on position
+            float r = (i + 3) / 6.0f;
+            float g = (j + 2) / 4.0f;
+            float b = 0.5f + 0.5f * ((i + j) % 2);
+
+            // Vary metallicness
+            float metallic = ((i + j) % 3) * 0.4f;
+
+            h_spheres.push_back({
+                make_float3(x, y, z), 0.8f,
+                {make_float3(r, g, b), metallic, 0.5f, 30.0f}
+            });
+        }
+    }
+
+    // Add some random scattered spheres
+    for (int i = 0; i < 20; i++) {
+        float x = (i % 5 - 2) * 4.0f + (i % 3) * 0.5f;
+        float y = (i % 4) * 0.8f;
+        float z = -15.0f - (i % 7) * 2.0f;
+
+        float r = (i % 5) / 4.0f;
+        float g = ((i * 3) % 7) / 6.0f;
+        float b = ((i * 7) % 11) / 10.0f;
+
+        h_spheres.push_back({
+            make_float3(x, y, z), 0.5f,
+            {make_float3(r, g, b), (i % 3) * 0.3f, 0.6f, 20.0f}
+        });
+    }
     
     // Lights
     h_lights.push_back({
