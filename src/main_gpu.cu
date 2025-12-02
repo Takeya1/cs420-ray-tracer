@@ -31,44 +31,44 @@
 // =========================================================
 
 struct float3_ops {
-    __device__ static float3 make(float x, float y, float z) {
+    __host__ __device__ static float3 make(float x, float y, float z) {
         return make_float3(x, y, z);
     }
-    
-    __device__ static float3 add(const float3& a, const float3& b) {
+
+    __host__ __device__ static float3 add(const float3& a, const float3& b) {
         return make_float3(a.x + b.x, a.y + b.y, a.z + b.z);
     }
-    
-    __device__ static float3 sub(const float3& a, const float3& b) {
+
+    __host__ __device__ static float3 sub(const float3& a, const float3& b) {
         return make_float3(a.x - b.x, a.y - b.y, a.z - b.z);
     }
-    
-    __device__ static float3 mul(const float3& a, float t) {
+
+    __host__ __device__ static float3 mul(const float3& a, float t) {
         return make_float3(a.x * t, a.y * t, a.z * t);
     }
-    
-    __device__ static float3 mul_componentwise(const float3& a, const float3& b) {
+
+    __host__ __device__ static float3 mul_componentwise(const float3& a, const float3& b) {
         return make_float3(a.x * b.x, a.y * b.y, a.z * b.z);
     }
-    
-    __device__ static float dot(const float3& a, const float3& b) {
+
+    __host__ __device__ static float dot(const float3& a, const float3& b) {
         return a.x * b.x + a.y * b.y + a.z * b.z;
     }
-    
-    __device__ static float length(const float3& v) {
+
+    __host__ __device__ static float length(const float3& v) {
         return sqrtf(dot(v, v));
     }
-    
-    __device__ static float3 normalize(const float3& v) {
+
+    __host__ __device__ static float3 normalize(const float3& v) {
         float len = length(v);
         return make_float3(v.x/len, v.y/len, v.z/len);
     }
-    
-    __device__ static float3 reflect(const float3& v, const float3& n) {
+
+    __host__ __device__ static float3 reflect(const float3& v, const float3& n) {
         return sub(v, mul(n, 2.0f * dot(v, n)));
     }
-    
-    __device__ static float3 lerp(const float3& a, const float3& b, float t) {
+
+    __host__ __device__ static float3 lerp(const float3& a, const float3& b, float t) {
         return add(mul(a, 1.0f - t), mul(b, t));
     }
 };
