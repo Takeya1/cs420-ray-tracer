@@ -11,8 +11,8 @@ else
     OMPFLAGS = -fopenmp
 endif
 
-NVCC = nvcc
-CUDAFLAGS = -O3 -arch=sm_60
+NVCC = /usr/local/cuda/bin/nvcc
+CUDAFLAGS = -O3 -arch=sm_60 -ccbin /usr/bin/gcc-9
 
 # Define source and include directories
 SRCDIR = src
@@ -33,7 +33,7 @@ openmp: $(SRCDIR)/main.cpp
 
 # Week 2 target (placeholder)
 cuda: $(SRCDIR)/main_gpu.cu
-	$(NVCC) $(CUDAFLAGS) -o ray_cuda $(SRCDIR)/main_gpu.cu
+	$(NVCC) $(CUDAFLAGS) -lstdc++ -lm -o ray_cuda $(SRCDIR)/main_gpu.cu
 
 # Week 3 target (placeholder)
 hybrid: $(SRCDIR)/main_hybrid.cpp $(SRCDIR)/kernel.cu
