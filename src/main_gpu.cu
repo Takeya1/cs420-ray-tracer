@@ -47,6 +47,10 @@ struct float3_ops {
         return make_float3(a.x * t, a.y * t, a.z * t);
     }
     
+    __device__ static float3 mul_componentwise(const float3& a, const float3& b) {
+        return make_float3(a.x * b.x, a.y * b.y, a.z * b.z);
+    }
+    
     __device__ static float dot(const float3& a, const float3& b) {
         return a.x * b.x + a.y * b.y + a.z * b.z;
     }
@@ -98,8 +102,26 @@ struct GPUSphere {
     __device__ bool intersect(const GPURay& ray, float t_min, float t_max, float& t) const {
         // TODO: Implement ray-sphere intersection on GPU
         // Same algorithm as CPU version but using float3 operations
-        
-        // PLACEHOLDER
+        float3 oc = float3_ops::sub(ray.origin, center);
+        float a = float3_ops::dot(ray.direction, ray.direction);
+        float b = float3_ops::dot(oc, ray.direction);
+        float c = float3_ops::dot(oc, oc) - radius * radius;
+        float discriminant = b * b - 4 * a * c;
+        //check if discriminant is positive
+        if (discriminant < 0) return false;
+        else {
+            float sqrt_disc = sqrtf(discriminant);
+            float root = (-b - sqrt_disc) / (2.0f * a);
+            if (root < t_max && root > t_min) {
+                t = root;
+                return true;
+            }
+            root = (-b + sqrt_disc) / (2.0f * a);
+            if (root < t_max && root > t_min) {
+                t = root;
+                return true;
+            }
+        }
         return false;
     }
     
@@ -169,20 +191,81 @@ __global__ void render_kernel(float3* framebuffer,
     // TODO: STUDENT CODE HERE
     // Steps:
     // 1. Generate ray for this pixel
+    float u = float(x + 0.5f ) / float(width);
+    float v = float(y + 0.5f ) / float(height);
+    GPURay ray = camera.get_ray(u, v);
     // 2. Initialize color accumulator and attenuation
+    float3 final_color = make_float3(0.0f, 0.0f, 0.0f);
+    float3 attenuation = make_float3(1.0f, 1.0f, 1.0f);
     // 3. Iterative ray bouncing (instead of recursion):
-    //    for (int bounce = 0; bounce < max_bounces; bounce++) {
+        for (int bounce = 0; bounce < max_bounces; bounce++) {
     //        a. Find intersection
+            float t_closest = 1e20f;
+            GPUSphere* hit_sphere = nullptr;
+            for (int i = 0; i < num_spheres; i++) {
+                float t;
+                if (spheres[i].intersect(ray, 0.001f, t_closest, t)) {
+                    t_closest = t;
+                    hit_sphere = &spheres[i];
+                }
+            }
     //        b. If no hit, add background color and break
+            if (hit_sphere == nullptr) {
+                float3 unit_direction = float3_ops::normalize(ray.direction);
+                float t = 0.5f * (unit_direction.y + 1.0f);
+                float3 background = float3_ops::lerp(make_float3(1.0f, 1.0f, 1.0f), 
+                                                    make_float3(0.5f, 0.7f, 1.0f), t);
+                final_color = float3_ops::add(final_color, 
+                                              float3_ops::mul_componentwise(background, attenuation));
+                break;
+            }
     //        c. Calculate shading (ambient + diffuse + specular)
+            float3 hit_point = ray.at(t_closest);
+            float3 normal = hit_sphere->normal_at(hit_point);
+            float3 view_dir = float3_ops::mul(ray.direction, -1.0f);
+            
+            // Simple ambient
+            float3 ambient = float3_ops::mul(hit_sphere->material.albedo, 0.1f);
+            float3 diffuse = make_float3(0.0f, 0.0f, 0.0f);
+            float3 specular = make_float3(0.0f, 0.0f, 0.0f);
+            
+            for (int l = 0; l < num_lights; l++) {
+                float3 light_dir = float3_ops::sub(lights[l].position, hit_point);
+                light_dir = float3_ops::normalize(light_dir);
+                
+                // Diffuse
+                float diff = fmaxf(float3_ops::dot(normal, light_dir), 0.0f);
+                diffuse = float3_ops::add(diffuse, 
+                                          float3_ops::mul(
+                                              float3_ops::mul_componentwise(hit_sphere->material.albedo, lights[l].color),
+                                              diff * lights[l].intensity));
+                
+                // Specular
+                float3 reflect_dir = float3_ops::reflect(float3_ops::mul(light_dir, -1.0f), normal);
+                float spec = powf(fmaxf(float3_ops::dot(view_dir, reflect_dir), 0.0f), 
+                                  hit_sphere->material.shininess);
+                specular = float3_ops::add(specular, 
+                                           float3_ops::mul(
+                                               lights[l].color,
+                                               spec * lights[l].intensity));
+            }
+            
+            float3 local_color = float3_ops::add(ambient, 
+                                                 float3_ops::add(diffuse, specular));
+            final_color = float3_ops::add(final_color, 
+                                          float3_ops::mul_componentwise(local_color, attenuation));
+            
+            // Prepare for next bounce
+            ray.origin = hit_point;
+            ray.direction = float3_ops::reflect(ray.direction, normal);
+            attenuation = float3_ops::mul_componentwise(attenuation, hit_sphere->material.albedo);
+        }
     //        d. If reflective, setup ray for next bounce
     //        e. Accumulate color with attenuation
     //    }
     // 4. Store final color in framebuffer
-    
-    // PLACEHOLDER - Just set to red for now
     int pixel_idx = y * width + x;
-    framebuffer[pixel_idx] = make_float3(1.0f, 0.0f, 0.0f);
+    framebuffer[pixel_idx] = final_color;
 }
 
 // =========================================================
@@ -206,9 +289,16 @@ __global__ void render_kernel_optimized(float3* framebuffer,
     // 3. __syncthreads()
     // 4. Use shared_spheres instead of global_spheres for intersection tests
     
-    // For now, just call the basic kernel logic
-    render_kernel(framebuffer, global_spheres, num_spheres, 
-                 lights, num_lights, camera, width, height, max_bounces);
+    // For now, duplicate basic kernel logic here
+    // Calculate pixel coordinates
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    
+    if (x >= width || y >= height) return;
+    
+    // Placeholder - same as basic kernel for now
+    int pixel_idx = y * width + x;
+    framebuffer[pixel_idx] = make_float3(1.0f, 0.0f, 0.0f);
 }
 
 // =========================================================
@@ -359,8 +449,8 @@ int main(int argc, char* argv[]) {
     // Start with basic kernel, then implement and test optimized version
     
     render_kernel<<<blocks, threads>>>(
-        d_framebuffer, d_spheres, h_spheres.size(),
-        d_lights, h_lights.size(), camera, width, height, max_bounces
+        d_framebuffer, d_spheres, (int)h_spheres.size(),
+        d_lights, (int)h_lights.size(), camera, width, height, max_bounces
     );
     
     // For optimized version with shared memory:
