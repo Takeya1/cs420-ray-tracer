@@ -4,9 +4,11 @@
 
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <vector>
 #include <chrono>
 #include <cmath>
+#include <string>
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 
@@ -14,6 +16,25 @@
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
+
+// GPU-compatible Vec3 structure
+struct Vec3 {
+    float x, y, z;
+
+    __host__ __device__ Vec3() : x(0), y(0), z(0) {}
+    __host__ __device__ Vec3(float x_, float y_, float z_) : x(x_), y(y_), z(z_) {}
+};
+
+// Camera configuration structure
+struct CameraConfig {
+    Vec3 position;
+    Vec3 look_at;
+    float fov;
+
+    CameraConfig() : position(), look_at(0, 0, -1), fov(60.0f) {}
+    CameraConfig(Vec3 pos, Vec3 target, float field_of_view)
+        : position(pos), look_at(target), fov(field_of_view) {}
+};
 
 // CUDA error checking macro
 #define CUDA_CHECK(call) \
@@ -219,7 +240,7 @@ void write_ppm(const std::string& filename, const std::vector<float3>& framebuff
                int width, int height) {
     std::ofstream file(filename);
     file << "P3\n" << width << " " << height << "\n255\n";
-    
+
     for (int j = height - 1; j >= 0; j--) {
         for (int i = 0; i < width; i++) {
             float3 color = framebuffer[j * width + i];
@@ -231,12 +252,135 @@ void write_ppm(const std::string& filename, const std::vector<float3>& framebuff
     }
 }
 
-GPUCamera setup_camera(int width, int height) {
-    // Camera parameters
-    float3 lookfrom = make_float3(0, 2, 5);
-    float3 lookat = make_float3(0, 0, -20);
+// Load scene from text file (GPU-compatible version)
+bool load_scene_gpu(const std::string& filename,
+                    std::vector<GPUSphere>& spheres,
+                    std::vector<GPULight>& lights,
+                    float3& ambient_light,
+                    CameraConfig& camera_config,
+                    bool& has_camera) {
+    std::ifstream file(filename);
+
+    if (!file.is_open()) {
+        std::cerr << "Error: Could not open scene file: " << filename << std::endl;
+        return false;
+    }
+
+    spheres.clear();
+    lights.clear();
+    ambient_light = make_float3(0.1f, 0.1f, 0.1f);
+    has_camera = false;
+
+    std::string line;
+    int line_number = 0;
+
+    while (std::getline(file, line)) {
+        line_number++;
+
+        // Skip empty lines and comments
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+
+        // Trim leading whitespace
+        size_t start = line.find_first_not_of(" \t");
+        if (start == std::string::npos) {
+            continue;
+        }
+        line = line.substr(start);
+
+        // Skip lines that start with # after trimming
+        if (line[0] == '#') {
+            continue;
+        }
+
+        std::istringstream iss(line);
+        std::string type;
+        iss >> type;
+
+        if (type == "sphere") {
+            // sphere: x y z radius r g b metallic roughness shininess
+            float x, y, z, radius;
+            float r, g, b;
+            float metallic, roughness, shininess;
+
+            if (!(iss >> x >> y >> z >> radius >> r >> g >> b >> metallic >> roughness >> shininess)) {
+                std::cerr << "Warning: Invalid sphere at line " << line_number << ", skipping\n";
+                continue;
+            }
+
+            GPUSphere sphere;
+            sphere.center = make_float3(x, y, z);
+            sphere.radius = radius;
+            sphere.material.albedo = make_float3(r, g, b);
+            sphere.material.metallic = metallic;
+            sphere.material.roughness = roughness;
+            sphere.material.shininess = shininess;
+
+            spheres.push_back(sphere);
+        }
+        else if (type == "light") {
+            // light: x y z r g b intensity
+            float x, y, z;
+            float r, g, b;
+            float intensity;
+
+            if (!(iss >> x >> y >> z >> r >> g >> b >> intensity)) {
+                std::cerr << "Warning: Invalid light at line " << line_number << ", skipping\n";
+                continue;
+            }
+
+            GPULight light;
+            light.position = make_float3(x, y, z);
+            light.color = make_float3(r, g, b);
+            light.intensity = intensity;
+
+            lights.push_back(light);
+        }
+        else if (type == "ambient") {
+            // ambient: r g b
+            float r, g, b;
+
+            if (!(iss >> r >> g >> b)) {
+                std::cerr << "Warning: Invalid ambient at line " << line_number << ", skipping\n";
+                continue;
+            }
+
+            ambient_light = make_float3(r, g, b);
+        }
+        else if (type == "camera") {
+            // camera: pos_x pos_y pos_z look_x look_y look_z fov
+            float px, py, pz;
+            float lx, ly, lz;
+            float fov;
+
+            if (!(iss >> px >> py >> pz >> lx >> ly >> lz >> fov)) {
+                std::cerr << "Warning: Invalid camera at line " << line_number << ", skipping\n";
+                continue;
+            }
+
+            camera_config = CameraConfig(Vec3(px, py, pz), Vec3(lx, ly, lz), fov);
+            has_camera = true;
+        }
+        else {
+            std::cerr << "Warning: Unknown type '" << type << "' at line " << line_number << ", skipping\n";
+        }
+    }
+
+    file.close();
+
+    std::cout << "Loaded scene: " << spheres.size() << " spheres, "
+              << lights.size() << " lights\n";
+
+    return true;
+}
+
+GPUCamera setup_camera(int width, int height, const CameraConfig& config) {
+    // Camera parameters from config
+    float3 lookfrom = make_float3(config.position.x, config.position.y, config.position.z);
+    float3 lookat = make_float3(config.look_at.x, config.look_at.y, config.look_at.z);
     float3 vup = make_float3(0, 1, 0);
-    float vfov = 60.0f;
+    float vfov = config.fov;
     float aspect = float(width) / float(height);
     
     // Calculate camera basis
@@ -278,7 +422,20 @@ int main(int argc, char* argv[]) {
     const int width = 800;
     const int height = 600;
     const int max_bounces = 3;
-    
+
+    // Scene file to load (default: simple.txt)
+    std::string scene_file = "scenes/simple.txt";
+
+    // Allow command-line scene selection
+    if (argc > 1) {
+        scene_file = argv[1];
+    }
+
+    std::cout << "=== GPU Ray Tracer ===\n";
+    std::cout << "Scene file: " << scene_file << "\n";
+    std::cout << "Resolution: " << width << "x" << height << "\n";
+    std::cout << "Max bounces: " << max_bounces << "\n\n";
+
     // CUDA device info
     int device;
     CUDA_CHECK(cudaGetDevice(&device));
@@ -286,37 +443,32 @@ int main(int argc, char* argv[]) {
     CUDA_CHECK(cudaGetDeviceProperties(&props, device));
     std::cout << "Using GPU: " << props.name << std::endl;
     std::cout << "  SM Count: " << props.multiProcessorCount << std::endl;
-    std::cout << "  Shared Memory per Block: " << props.sharedMemPerBlock << " bytes\n";
-    
-    // Create scene data
+    std::cout << "  Shared Memory per Block: " << props.sharedMemPerBlock << " bytes\n\n";
+
+    // Load scene from file
     std::vector<GPUSphere> h_spheres;
     std::vector<GPULight> h_lights;
-    
-    // ===== TODO: STUDENT - CREATE GPU SCENE =====
-    // Add spheres (aim for 50-100 for GPU testing)
-    
-    // Example spheres
-    h_spheres.push_back({
-        make_float3(0, 0, -20), 2.0f,
-        {make_float3(1, 0, 0), 0.0f, 1.0f, 10.0f}
-    });
-    
-    h_spheres.push_back({
-        make_float3(3, 0, -20), 2.0f,
-        {make_float3(0.8f, 0.8f, 0.8f), 0.8f, 0.2f, 100.0f}
-    });
-    
-    // TODO: Add many more spheres (use loops to create patterns)
-    
-    // Lights
-    h_lights.push_back({
-        make_float3(10, 10, -10),
-        make_float3(1, 1, 1),
-        0.7f
-    });
-    
-    std::cout << "Scene: " << h_spheres.size() << " spheres, " 
+    float3 ambient_light;
+    CameraConfig camera_config;
+    bool has_camera = false;
+
+    if (!load_scene_gpu(scene_file, h_spheres, h_lights, ambient_light, camera_config, has_camera)) {
+        std::cerr << "Failed to load scene file: " << scene_file << std::endl;
+        return 1;
+    }
+
+    if (!has_camera) {
+        std::cout << "No camera specified in scene file, using default\n";
+        camera_config = CameraConfig(Vec3(0, 2, 5), Vec3(0, 0, -20), 60.0f);
+    }
+
+    std::cout << "Scene: " << h_spheres.size() << " spheres, "
               << h_lights.size() << " lights\n";
+    std::cout << "Camera: pos=(" << camera_config.position.x << ", "
+              << camera_config.position.y << ", " << camera_config.position.z << ") "
+              << "look_at=(" << camera_config.look_at.x << ", "
+              << camera_config.look_at.y << ", " << camera_config.look_at.z << ") "
+              << "fov=" << camera_config.fov << "\n\n";
     
     // Allocate device memory
     GPUSphere* d_spheres;
@@ -336,7 +488,7 @@ int main(int argc, char* argv[]) {
                           cudaMemcpyHostToDevice));
     
     // Setup camera
-    GPUCamera camera = setup_camera(width, height);
+    GPUCamera camera = setup_camera(width, height, camera_config);
     
     // Configure kernel launch
     dim3 threads(16, 16);
