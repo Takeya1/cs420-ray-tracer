@@ -6,7 +6,7 @@
 #include "sphere.h"
 #include "vec3.h"
 #include "ray.h"
-#include "math_constants.h"
+#include "ray_constants.h"
 
 struct Light {
     Vec3 position;

@@ -12,7 +12,7 @@
 #include "sphere.h"
 #include "scene.h"
 #include "scene_loader.h"
-#include "math_constants.h"
+#include "ray_constants.h"
 
 class Camera {
 public:

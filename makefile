@@ -12,7 +12,7 @@ else
 endif
 
 NVCC = /usr/local/cuda/bin/nvcc
-CUDAFLAGS = -O3 -arch=sm_60 -ccbin /usr/bin/gcc-9
+CUDAFLAGS = -O3 -arch=sm_60 -ccbin /usr/bin/gcc
 
 # Define source and include directories
 SRCDIR = src
@@ -34,6 +34,17 @@ openmp: $(SRCDIR)/main.cpp
 # Week 2 target (placeholder)
 cuda: $(SRCDIR)/main_gpu.cu
 	$(NVCC) $(CUDAFLAGS) -lstdc++ -lm -o ray_cuda $(SRCDIR)/main_gpu.cu
+	@echo "Rendering GPU scenes: simple, medium, complex"
+	@bash -lc 'for sc in simple medium complex; do \
+		echo "  -> Rendering $$sc"; \
+		./ray_cuda scenes/$$sc.txt >/dev/null 2>&1 || true; \
+		mv output_gpu.ppm output_gpu_$$sc.ppm 2>/dev/null || true; \
+		if command -v magick >/dev/null 2>&1; then \
+			magick output_gpu_$$sc.ppm output_gpu_$$sc.png 2>/dev/null || true; \
+		else \
+			convert output_gpu_$$sc.ppm output_gpu_$$sc.png 2>/dev/null || true; \
+		fi; \
+	done'
 
 # Week 3 target (placeholder)
 hybrid: $(SRCDIR)/main_hybrid.cpp $(SRCDIR)/kernel.cu

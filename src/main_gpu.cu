@@ -4,6 +4,7 @@
 
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <vector>
 #include <chrono>
 #include <cmath>
@@ -55,6 +56,14 @@ struct float3_ops {
         return a.x * b.x + a.y * b.y + a.z * b.z;
     }
 
+    __host__ __device__ static float3 cross(const float3& a, const float3& b) {
+        return make_float3(
+            a.y * b.z - a.z * b.y,
+            a.z * b.x - a.x * b.z,
+            a.x * b.y - a.y * b.x
+        );
+    }
+
     __host__ __device__ static float length(const float3& v) {
         return sqrtf(dot(v, v));
     }
@@ -98,7 +107,7 @@ struct GPUSphere {
     float radius;
     GPUMaterial material;
     
-    // ===== TODO: STUDENT - IMPLEMENT GPU SPHERE INTERSECTION =====
+    //===== TODO: STUDENT - IMPLEMENT GPU SPHERE INTERSECTION =====
     __device__ bool intersect(const GPURay& ray, float t_min, float t_max, float& t) const {
         // TODO: Implement ray-sphere intersection on GPU
         // Same algorithm as CPU version but using float3 operations
@@ -106,17 +115,17 @@ struct GPUSphere {
         float a = float3_ops::dot(ray.direction, ray.direction);
         float b = float3_ops::dot(oc, ray.direction);
         float c = float3_ops::dot(oc, oc) - radius * radius;
-        float discriminant = b * b - 4 * a * c;
+        float discriminant = b * b - a * c;
         //check if discriminant is positive
         if (discriminant < 0) return false;
         else {
             float sqrt_disc = sqrtf(discriminant);
-            float root = (-b - sqrt_disc) / (2.0f * a);
+            float root = (-b - sqrt_disc) / a;
             if (root < t_max && root > t_min) {
                 t = root;
                 return true;
             }
-            root = (-b + sqrt_disc) / (2.0f * a);
+            root = (-b + sqrt_disc) / a;
             if (root < t_max && root > t_min) {
                 t = root;
                 return true;
@@ -337,16 +346,8 @@ GPUCamera setup_camera(int width, int height) {
     float focal_length = 1.0f;
     
     float3 w = float3_ops::normalize(float3_ops::sub(lookfrom, lookat));
-    float3 u = float3_ops::normalize(make_float3(
-        vup.y * w.z - vup.z * w.y,
-        vup.z * w.x - vup.x * w.z,
-        vup.x * w.y - vup.y * w.x
-    ));
-    float3 v = make_float3(
-        w.y * u.z - w.z * u.y,
-        w.z * u.x - w.x * u.z,
-        w.x * u.y - w.y * u.x
-    );
+    float3 u = float3_ops::normalize(float3_ops::cross(vup, w));
+    float3 v = float3_ops::cross(w, u);
     
     GPUCamera camera;
     camera.origin = lookfrom;
@@ -361,6 +362,56 @@ GPUCamera setup_camera(int width, int height) {
     );
     
     return camera;
+}
+
+void load_scene_file(const std::string& filename,
+                     std::vector<GPUSphere>& spheres,
+                     std::vector<GPULight>& lights) {
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Could not open scene file: " << filename << std::endl;
+        return;
+    }
+    
+    std::string line;
+    while (std::getline(file, line)) {
+        // Skip empty lines and comments
+        if (line.empty() || line[0] == '#') continue;
+        
+        // Trim leading whitespace
+        size_t start = line.find_first_not_of(" \t");
+        if (start == std::string::npos) continue;
+        line = line.substr(start);
+        
+        std::istringstream iss(line);
+        std::string type;
+        iss >> type;
+        
+        if (type == "sphere") {
+            // sphere: x y z radius r g b metallic roughness shininess
+            float x, y, z, radius, r, g, b, metallic, roughness, shininess;
+            if (iss >> x >> y >> z >> radius >> r >> g >> b >> metallic >> roughness >> shininess) {
+                GPUSphere sphere;
+                sphere.center = make_float3(x, y, z);
+                sphere.radius = radius;
+                sphere.material.albedo = make_float3(r, g, b);
+                sphere.material.metallic = metallic;
+                sphere.material.roughness = roughness;
+                sphere.material.shininess = shininess;
+                spheres.push_back(sphere);
+            }
+        } else if (type == "light") {
+            // light: x y z r g b intensity
+            float x, y, z, r, g, b, intensity;
+            if (iss >> x >> y >> z >> r >> g >> b >> intensity) {
+                GPULight light;
+                light.position = make_float3(x, y, z);
+                light.color = make_float3(r, g, b);
+                light.intensity = intensity;
+                lights.push_back(light);
+            }
+        }
+    }
 }
 
 int main(int argc, char* argv[]) {
@@ -382,28 +433,38 @@ int main(int argc, char* argv[]) {
     std::vector<GPUSphere> h_spheres;
     std::vector<GPULight> h_lights;
     
-    // ===== TODO: STUDENT - CREATE GPU SCENE =====
-    // Add spheres (aim for 50-100 for GPU testing)
+    // ===== LOAD SCENE FROM FILE =====
+    // Load scene from file (use scenes/simple.txt, scenes/medium.txt, or scenes/complex.txt)
+    std::string scene_file = "scenes/simple.txt";
+    if (argc > 1) {
+        scene_file = argv[1];
+    }
     
-    // Example spheres
-    h_spheres.push_back({
-        make_float3(0, 0, -20), 2.0f,
-        {make_float3(1, 0, 0), 0.0f, 1.0f, 10.0f}
-    });
+    std::cout << "Loading scene from: " << scene_file << std::endl;
+    load_scene_file(scene_file, h_spheres, h_lights);
     
-    h_spheres.push_back({
-        make_float3(3, 0, -20), 2.0f,
-        {make_float3(0.8f, 0.8f, 0.8f), 0.8f, 0.2f, 100.0f}
-    });
+    // If no scene was loaded, use default spheres
+    if (h_spheres.empty()) {
+        std::cout << "No spheres loaded from file, using defaults\n";
+        h_spheres.push_back({
+            make_float3(0, 0, -20), 2.0f,
+            {make_float3(1, 0, 0), 0.0f, 1.0f, 10.0f}
+        });
+        
+        h_spheres.push_back({
+            make_float3(3, 0, -20), 2.0f,
+            {make_float3(0.8f, 0.8f, 0.8f), 0.8f, 0.2f, 100.0f}
+        });
+    }
     
-    // TODO: Add many more spheres (use loops to create patterns)
-    
-    // Lights
-    h_lights.push_back({
-        make_float3(10, 10, -10),
-        make_float3(1, 1, 1),
-        0.7f
-    });
+    if (h_lights.empty()) {
+        std::cout << "No lights loaded from file, using defaults\n";
+        h_lights.push_back({
+            make_float3(10, 10, -10),
+            make_float3(1, 1, 1),
+            0.7f
+        });
+    }
     
     std::cout << "Scene: " << h_spheres.size() << " spheres, " 
               << h_lights.size() << " lights\n";
