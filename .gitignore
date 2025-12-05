@@ -1,0 +1,31 @@
+# Ignore built executables
+ray_cuda
+ray_openmp
+ray_serial
+ray_hybrid
+
+# Object files and temporary build files
+*.o
+*.obj
+*.exe
+*.out
+
+# Image outputs and ppm files
+*.ppm
+*.png
+output_*.ppm
+output_*.png
+output_gpu_*.ppm
+output_gpu_*.png
+
+# Benchmark results and generated CSVs
+benchmark_results/
+
+# Logs and temp files
+*.log
+*.tmp
+
+# Ignore user/editor files
+.vscode/
+*.swp
+.DS_Store
