@@ -35,16 +35,7 @@ openmp: $(SRCDIR)/main.cpp
 cuda: $(SRCDIR)/main_gpu.cu
 	$(NVCC) $(CUDAFLAGS) -lstdc++ -lm -o ray_cuda $(SRCDIR)/main_gpu.cu
 	@echo "Rendering GPU scenes: simple, medium, complex"
-	@bash -lc 'for sc in simple medium complex; do \
-		echo "  -> Rendering $$sc"; \
-		./ray_cuda scenes/$$sc.txt >/dev/null 2>&1 || true; \
-		mv output_gpu.ppm output_gpu_$$sc.ppm 2>/dev/null || true; \
-		if command -v magick >/dev/null 2>&1; then \
-			magick output_gpu_$$sc.ppm output_gpu_$$sc.png 2>/dev/null || true; \
-		else \
-			convert output_gpu_$$sc.ppm output_gpu_$$sc.png 2>/dev/null || true; \
-		fi; \
-	done'
+	@./scripts/gpu_render_all.sh
 
 # Week 3 target (placeholder)
 hybrid: $(SRCDIR)/main_hybrid.cpp $(SRCDIR)/kernel.cu
