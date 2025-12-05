@@ -113,10 +113,11 @@ int main(int argc, char* argv[]) {
     const int width = 640;
     const int height = 480;
     const int max_depth = 3;
-    
+    const int samples_per_pixel = 4;  // Antialiasing samples (4 = 2x2 grid)
+
     // Scene file to load (default: simple.txt)
     std::string scene_file = "scenes/simple.txt";
-    
+
     // Allow command-line scene selection
     if (argc > 1) {
         scene_file = argv[1];
@@ -148,16 +149,29 @@ int main(int argc, char* argv[]) {
     auto start = std::chrono::high_resolution_clock::now();
     
     // SERIAL VERSION
-    std::cout << "Rendering (Serial)...\n";
+    std::cout << "Rendering (Serial) with " << samples_per_pixel << " samples per pixel...\n";
     for (int j = 0; j < height; j++) {
         if (j % 50 == 0) std::cout << "Row " << j << "/" << height << "\n";
-        
+
         for (int i = 0; i < width; i++) {
-            double u = double(i) / (width - 1);
-            double v = double(j) / (height - 1);
-            
-            Ray ray = camera.get_ray(u, v);
-            framebuffer[j * width + i] = trace_ray(ray, scene, max_depth);
+            Vec3 pixel_color(0, 0, 0);
+
+            // Take multiple samples per pixel for antialiasing
+            for (int s = 0; s < samples_per_pixel; s++) {
+                // Random offset within the pixel for stochastic sampling
+                // For deterministic 2x2 grid pattern:
+                double dx = (s % 2) * 0.5;
+                double dy = (s / 2) * 0.5;
+
+                double u = (double(i) + dx) / (width - 1);
+                double v = (double(j) + dy) / (height - 1);
+
+                Ray ray = camera.get_ray(u, v);
+                pixel_color = pixel_color + trace_ray(ray, scene, max_depth);
+            }
+
+            // Average the samples
+            framebuffer[j * width + i] = pixel_color * (1.0 / samples_per_pixel);
         }
     }
     
@@ -170,27 +184,38 @@ int main(int argc, char* argv[]) {
     // TODO: STUDENT - Add OpenMP version
     // OPENMP VERSION
     #ifdef _OPENMP
-    std::cout << "\nRendering (OpenMP)...\n";
+    std::cout << "\nRendering (OpenMP) with " << samples_per_pixel << " samples per pixel...\n";
     start = std::chrono::high_resolution_clock::now();
-    
+
     // YOUR OPENMP CODE HERE
     // Hint: Use #pragma omp parallel for with appropriate scheduling
     #pragma omp parallel for schedule (dynamic, 8)
     for (int j = 0; j < height; j++){
         for (int i = 0; i < width; i++){
-            double u = double(i) / (width - 1);
-            double v = double(j) / (height - 1);
-            
-            Ray ray = camera.get_ray(u,v);
-            framebuffer[j * width + i] = trace_ray(ray, scene, max_depth);
+            Vec3 pixel_color(0, 0, 0);
+
+            // Take multiple samples per pixel for antialiasing
+            for (int s = 0; s < samples_per_pixel; s++) {
+                double dx = (s % 2) * 0.5;
+                double dy = (s / 2) * 0.5;
+
+                double u = (double(i) + dx) / (width - 1);
+                double v = (double(j) + dy) / (height - 1);
+
+                Ray ray = camera.get_ray(u, v);
+                pixel_color = pixel_color + trace_ray(ray, scene, max_depth);
+            }
+
+            // Average the samples
+            framebuffer[j * width + i] = pixel_color * (1.0 / samples_per_pixel);
         }
     }
 
-    
+
     end = std::chrono::high_resolution_clock::now();
     diff = end - start;
     std::cout << "OpenMP time: " << diff.count() << " seconds\n";
-    
+
     write_ppm("output_openmp.ppm", framebuffer, width, height);
     #endif
     

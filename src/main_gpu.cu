@@ -184,29 +184,38 @@ struct GPUCamera {
 // - Be careful with memory access patterns
 // =========================================================
 
-__global__ void render_kernel(float3* framebuffer, 
+__global__ void render_kernel(float3* framebuffer,
                              GPUSphere* spheres, int num_spheres,
                              GPULight* lights, int num_lights,
                              GPUCamera camera,
                              int width, int height,
-                             int max_bounces) {
-    
+                             int max_bounces,
+                             int samples_per_pixel) {
+
     // Calculate pixel coordinates
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-    
+
     if (x >= width || y >= height) return;
-    
-    // TODO: STUDENT CODE HERE
-    // Steps:
-    // 1. Generate ray for this pixel
-    float u = float(x + 0.5f ) / float(width);
-    float v = float(y + 0.5f ) / float(height);
-    GPURay ray = camera.get_ray(u, v);
-    // 2. Initialize color accumulator and attenuation
-    float3 final_color = make_float3(0.0f, 0.0f, 0.0f);
-    float3 attenuation = make_float3(1.0f, 1.0f, 1.0f);
-    // 3. Iterative ray bouncing (instead of recursion):
+
+    // Accumulate color from multiple samples for antialiasing
+    float3 pixel_color = make_float3(0.0f, 0.0f, 0.0f);
+
+    for (int s = 0; s < samples_per_pixel; s++) {
+        // Compute sub-pixel offset for antialiasing (2x2 grid pattern)
+        float dx = (s % 2) * 0.5f;
+        float dy = (s / 2) * 0.5f;
+
+        // TODO: STUDENT CODE HERE
+        // Steps:
+        // 1. Generate ray for this pixel
+        float u = float(x + dx) / float(width);
+        float v = float(y + dy) / float(height);
+        GPURay ray = camera.get_ray(u, v);
+        // 2. Initialize color accumulator and attenuation
+        float3 sample_color = make_float3(0.0f, 0.0f, 0.0f);
+        float3 attenuation = make_float3(1.0f, 1.0f, 1.0f);
+        // 3. Iterative ray bouncing (instead of recursion):
         for (int bounce = 0; bounce < max_bounces; bounce++) {
     //        a. Find intersection
             float t_closest = 1e20f;
@@ -218,13 +227,13 @@ __global__ void render_kernel(float3* framebuffer,
                     hit_sphere = &spheres[i];
                 }
             }
-    //        b. If no hit, add background color and break
+            //        b. If no hit, add background color and break
             if (hit_sphere == nullptr) {
                 float3 unit_direction = float3_ops::normalize(ray.direction);
                 float t = 0.5f * (unit_direction.y + 1.0f);
-                float3 background = float3_ops::lerp(make_float3(1.0f, 1.0f, 1.0f), 
+                float3 background = float3_ops::lerp(make_float3(1.0f, 1.0f, 1.0f),
                                                     make_float3(0.5f, 0.7f, 1.0f), t);
-                final_color = float3_ops::add(final_color, 
+                sample_color = float3_ops::add(sample_color,
                                               float3_ops::mul_componentwise(background, attenuation));
                 break;
             }
@@ -259,22 +268,30 @@ __global__ void render_kernel(float3* framebuffer,
                                                spec * lights[l].intensity));
             }
             
-            float3 local_color = float3_ops::add(ambient, 
+            float3 local_color = float3_ops::add(ambient,
                                                  float3_ops::add(diffuse, specular));
-            final_color = float3_ops::add(final_color, 
+            sample_color = float3_ops::add(sample_color,
                                           float3_ops::mul_componentwise(local_color, attenuation));
-            
+
             // Prepare for next bounce
             ray.origin = hit_point;
             ray.direction = float3_ops::reflect(ray.direction, normal);
             attenuation = float3_ops::mul_componentwise(attenuation, hit_sphere->material.albedo);
         }
-    //        d. If reflective, setup ray for next bounce
-    //        e. Accumulate color with attenuation
-    //    }
+        //        d. If reflective, setup ray for next bounce
+        //        e. Accumulate color with attenuation
+        //    }
+
+        // Accumulate this sample
+        pixel_color = float3_ops::add(pixel_color, sample_color);
+    }
+
+    // Average all samples
+    pixel_color = float3_ops::mul(pixel_color, 1.0f / float(samples_per_pixel));
+
     // 4. Store final color in framebuffer
     int pixel_idx = y * width + x;
-    framebuffer[pixel_idx] = final_color;
+    framebuffer[pixel_idx] = pixel_color;
 }
 
 // =========================================================
@@ -419,6 +436,7 @@ int main(int argc, char* argv[]) {
     const int width = 800;
     const int height = 600;
     const int max_bounces = 3;
+    const int samples_per_pixel = 4;  // Antialiasing samples (4 = 2x2 grid)
     
     // CUDA device info
     int device;
@@ -494,24 +512,26 @@ int main(int argc, char* argv[]) {
     dim3 blocks((width + threads.x - 1) / threads.x,
                 (height + threads.y - 1) / threads.y);
     
-    std::cout << "Launching kernel with " << blocks.x << "x" << blocks.y 
+    std::cout << "Launching kernel with " << blocks.x << "x" << blocks.y
               << " blocks of " << threads.x << "x" << threads.y << " threads\n";
-    
+    std::cout << "Antialiasing: " << samples_per_pixel << " samples per pixel\n";
+
     // Timing
     cudaEvent_t start, stop;
     CUDA_CHECK(cudaEventCreate(&start));
     CUDA_CHECK(cudaEventCreate(&stop));
-    
+
     // Render
     std::cout << "Rendering..." << std::endl;
     CUDA_CHECK(cudaEventRecord(start));
-    
+
     // ===== TODO: STUDENT - CHOOSE KERNEL VERSION =====
     // Start with basic kernel, then implement and test optimized version
-    
+
     render_kernel<<<blocks, threads>>>(
         d_framebuffer, d_spheres, (int)h_spheres.size(),
-        d_lights, (int)h_lights.size(), camera, width, height, max_bounces
+        d_lights, (int)h_lights.size(), camera, width, height, max_bounces,
+        samples_per_pixel
     );
     
     // For optimized version with shared memory:
