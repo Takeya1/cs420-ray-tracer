@@ -120,7 +120,49 @@ Vec3 trace_ray_cpu(const Ray& ray, const Scene& scene, int depth) {
     // TODO: STUDENT - Implement CPU ray tracing
     // This should handle complex shading, deep reflections, etc.
     // Can reuse code from Week 1
+    if (depth <= 0) return Vec3(0, 0, 0);
     
+    double t;
+    int sphere_idx;
+    
+    if (!scene.find_intersection(ray, t, sphere_idx)) {
+        // Sky color gradient
+        double t = 0.5 * (ray.direction.y + 1.0);
+        return Vec3(1, 1, 1) * (1.0 - t) + Vec3(0.5, 0.7, 1.0) * t;
+    }
+    // Calculate hit point
+    Vec3 hit_point = ray.at(t);
+    
+    // Get the sphere and calculate normal
+    const Sphere& sphere = scene.spheres[sphere_idx];
+    Vec3 normal = sphere.normal_at(hit_point);
+    
+    // Calculate view direction (from hit point to camera)
+    Vec3 view_dir = (ray.origin - hit_point).normalized();
+    
+    // Get material and calculate base color with shading
+    const Material& mat = sphere.material;
+    Vec3 color = scene.shade(hit_point, normal, mat, view_dir);
+    
+    // Handle reflections if material is reflective
+    if (mat.reflectivity > 0.0 && depth > 1) {
+        // Calculate reflection direction: R = I - 2*(I·N)*N
+        // where I is the incident direction (ray.direction)
+        Vec3 incident = ray.direction.normalized();
+        Vec3 reflect_dir = incident - normal * (2.0 * dot(incident, normal));
+        
+        // Offset reflection ray origin to avoid self-intersection
+        Vec3 offset_origin = hit_point + normal * EPSILON;
+        Ray reflect_ray(offset_origin, reflect_dir.normalized());
+        
+        // Recursively trace reflection ray
+        Vec3 reflect_color = trace_ray(reflect_ray, scene, depth - 1);
+        
+        // Blend base color with reflection
+        color = color * (1.0 - mat.reflectivity) + reflect_color * mat.reflectivity;
+    }
+    
+    // return color;
     return scene.get_background(ray);
 }
 

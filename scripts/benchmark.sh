@@ -38,7 +38,8 @@ calc_pixels_per_second() {
     local time=$1
     local width=$2
     local height=$3
-    echo "scale=2; ($width * $height) / $time" | bc
+    # Use awk instead of bc to handle scientific notation
+    echo "$time $width $height" | awk '{printf "%.2f", ($2 * $3) / $1}'
 }
 
 # Function to run a single benchmark
@@ -60,15 +61,9 @@ run_benchmark() {
     export OMP_NUM_THREADS=$threads
     
     # Run and measure time
-    start_time=$(date +%s.%N)
-    if [ "$name" == "OpenMP" ]; then
-        timeout 60 ./$executable --openmp < /dev/null > temp_output.log 2>&1
-    else
-        timeout 60 ./$executable < /dev/null > temp_output.log 2>&1
-    fi
+    timeout 60 ./$executable "scenes/$scene" < /dev/null > temp_output.log 2>&1
     exit_code=$?
-    end_time=$(date +%s.%N)
-    
+
     if [ $exit_code -eq 124 ]; then
         echo -e "${RED}TIMEOUT${NC}"
         echo "$name,$scene,$threads,$iteration,TIMEOUT,0,0" >> $RESULTS_FILE
@@ -78,9 +73,24 @@ run_benchmark() {
         echo "$name,$scene,$threads,$iteration,FAILED,0,0" >> $RESULTS_FILE
         return
     fi
-    
-    # Calculate elapsed time
-    elapsed=$(echo "$end_time - $start_time" | bc)
+
+    # Extract elapsed time from program output
+    if [ "$name" == "Serial" ]; then
+        elapsed=$(grep "Serial time:" temp_output.log | awk '{print $3}')
+    elif [ "$name" == "OpenMP" ]; then
+        elapsed=$(grep "OpenMP time:" temp_output.log | awk '{print $3}')
+    elif [ "$name" == "CUDA" ]; then
+        elapsed=$(grep "GPU rendering time:" temp_output.log | awk '{print $4}')
+    elif [ "$name" == "Hybrid" ]; then
+        elapsed=$(grep "Hybrid time:" temp_output.log | awk '{print $3}')
+    fi
+
+    # Check if we got a valid time
+    if [ -z "$elapsed" ] || [ "$elapsed" == "0" ]; then
+        echo -e "${RED}FAILED${NC} (no timing data)"
+        echo "$name,$scene,$threads,$iteration,FAILED,0,0" >> $RESULTS_FILE
+        return
+    fi
     
     # Get image dimensions (assuming 640x480 for simple, 800x600 for medium, 1280x720 for complex)
     case $scene in
