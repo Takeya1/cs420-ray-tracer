@@ -310,21 +310,91 @@ __global__ void render_kernel_optimized(float3* framebuffer,
     
     // TODO: STUDENT CODE HERE
     // 1. Declare shared memory for spheres
-    //    extern __shared__ GPUSphere shared_spheres[];
+    //    extern __shared__ GPUSphere shared_spheres[]
+    extern __shared__ GPUSphere shared_spheres[];
+    int tid = threadIdx.y * blockDim.x + threadIdx.x;
+    int total_threads = blockDim.x * blockDim.y;
     // 2. Cooperatively load spheres into shared memory
+    for (int i = tid; i < num_spheres; i += total_threads) {
+        shared_spheres[i] = global_spheres[i];
+    }  
     // 3. __syncthreads()
+    __syncthreads();
     // 4. Use shared_spheres instead of global_spheres for intersection tests
-    
-    // For now, duplicate basic kernel logic here
     // Calculate pixel coordinates
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     
     if (x >= width || y >= height) return;
+    //generate ray (no antialiasing for simplicity)
+    float u = float(x) / float(width);
+    float v = float(y) / float(height);
+    GPURay ray = camera.get_ray(u, v);
     
-    // Placeholder - same as basic kernel for now
+    float3 sample_color = make_float3(0.0f, 0.0f, 0.0f);
+    float3 attenuation = make_float3(1.0f, 1.0f, 1.0f);
+    for (int bounce = 0; bounce < max_bounces; bounce++) {
+        float t_closest = 1e20f;
+        int hit_idx = - 1; // use index instead of pointer
+        //intersection test with shared memory spheres
+        for (int i = 0; i < num_spheres; i++) {
+            float t;
+            if (shared_spheres[i].intersect(ray, 0.001f, t_closest, t)) {
+                t_closest = t;
+                hit_idx = i;
+            }
+        }
+        if (hit_idx < 0) {
+            float3 unit_direction = float3_ops::normalize(ray.direction);
+            float t = 0.5f * (unit_direction.y + 1.0f);
+            float3 background = float3_ops::lerp(make_float3(1.0f, 1.0f, 1.0f),
+                                                make_float3(0.5f, 0.7f, 1.0f), t);
+            sample_color = float3_ops::add(sample_color,
+                                          float3_ops::mul_componentwise(background, attenuation));
+            break;
+        }
+        // use shared_spheres[hit_idx] for shading
+        float3 hit_point = ray.at(t_closest);
+        float3 normal = shared_spheres[hit_idx].normal_at(hit_point);
+        float3 view_dir = float3_ops::mul(ray.direction, -1.0f);
+        // Simple ambient
+        float3 ambient = float3_ops::mul(shared_spheres[hit_idx].material.albedo, 0.1f);
+        float3 diffuse = make_float3(0.0f, 0.0f, 0.0f);
+        float3 specular = make_float3(0.0f, 0.0f, 0.0f);
+
+        for (int l = 0; l < num_lights; l++) {
+            float3 light_dir = float3_ops::sub(lights[l].position, hit_point);
+            light_dir = float3_ops::normalize(light_dir);
+            
+            // Diffuse
+            float diff = fmaxf(float3_ops::dot(normal, light_dir), 0.0f);
+            diffuse = float3_ops::add(diffuse, 
+                                      float3_ops::mul(
+                                          float3_ops::mul_componentwise(shared_spheres[hit_idx].material.albedo, lights[l].color),
+                                          diff * lights[l].intensity));
+            
+            // Specular
+            float3 reflect_dir = float3_ops::reflect(float3_ops::mul(light_dir, -1.0f), normal);
+            float spec = powf(fmaxf(float3_ops::dot(view_dir, reflect_dir), 0.0f), 
+                              shared_spheres[hit_idx].material.shininess);
+            specular = float3_ops::add(specular, 
+                                       float3_ops::mul(
+                                           lights[l].color,
+                                           spec * lights[l].intensity));
+        }
+        float3 local_color = float3_ops::add(ambient,
+                                             float3_ops::add(diffuse, specular));
+        sample_color = float3_ops::add(sample_color,
+                                      float3_ops::mul_componentwise(local_color, attenuation));
+
+        // Prepare for next bounce
+        ray.origin = hit_point;
+        ray.direction = float3_ops::reflect(ray.direction, normal);
+        attenuation = float3_ops::mul_componentwise(attenuation, shared_spheres[hit_idx].material.albedo);
+    }
+    // Store final color in framebuffer
     int pixel_idx = y * width + x;
-    framebuffer[pixel_idx] = make_float3(1.0f, 0.0f, 0.0f);
+    framebuffer[pixel_idx] = sample_color;
 }
 
 // =========================================================
@@ -528,15 +598,23 @@ int main(int argc, char* argv[]) {
     // ===== TODO: STUDENT - CHOOSE KERNEL VERSION =====
     // Start with basic kernel, then implement and test optimized version
 
-    render_kernel<<<blocks, threads>>>(
-        d_framebuffer, d_spheres, (int)h_spheres.size(),
-        d_lights, (int)h_lights.size(), camera, width, height, max_bounces,
-        samples_per_pixel
-    );
+    // render_kernel<<<blocks, threads>>>(
+    //     d_framebuffer, d_spheres, (int)h_spheres.size(),
+    //     d_lights, (int)h_lights.size(), camera, width, height, max_bounces,
+    //     samples_per_pixel
+    // );
     
+    //For optimized version with shared memory:
     // For optimized version with shared memory:
-    // size_t shared_size = h_spheres.size() * sizeof(GPUSphere);
-    // render_kernel_optimized<<<blocks, threads, shared_size>>>(...);
+    size_t shared_size = h_spheres.size() * sizeof(GPUSphere);
+    render_kernel_optimized<<<blocks, threads, shared_size>>>(
+        d_framebuffer, 
+        d_spheres, (int)h_spheres.size(),
+        d_lights, (int)h_lights.size(), 
+        camera, 
+        width, height, 
+        max_bounces
+    );
     
     CUDA_CHECK(cudaEventRecord(stop));
     CUDA_CHECK(cudaEventSynchronize(stop));

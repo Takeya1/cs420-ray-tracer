@@ -50,43 +50,61 @@ test: serial
 	./ray_serial
 	@echo "Check output_serial.ppm"
 
-benchmark: serial openmp
+benchmark: serial openmp cuda
 	@echo "=== Performance Comparison ==="
 	@echo ""
 	@echo "--- Simple Scene ---"
 	@bash -c 'SERIAL_TIME=$$(./ray_serial scenes/simple.txt 2>/dev/null | grep "Serial time" | awk "{print \$$3}"); \
 	OPENMP_TIME=$$(./ray_openmp scenes/simple.txt 2>/dev/null | grep "OpenMP time" | awk "{print \$$3}"); \
+	CUDA_TIME=$$(./ray_cuda scenes/simple.txt 2>/dev/null | grep "GPU rendering time" | awk "{print \$$4}"); \
 	echo "Serial: $$SERIAL_TIME seconds"; \
 	echo "OpenMP: $$OPENMP_TIME seconds"; \
-	SPEEDUP=$$(awk -v s=$$SERIAL_TIME -v o=$$OPENMP_TIME "BEGIN {printf \"%.2f\", s/o}"); \
-	echo "Speedup: $${SPEEDUP}x"'
+	echo "CUDA:   $$CUDA_TIME seconds"; \
+	OPENMP_SPEEDUP=$$(awk -v s=$$SERIAL_TIME -v o=$$OPENMP_TIME "BEGIN {printf \"%.2f\", s/o}"); \
+	CUDA_SPEEDUP=$$(awk -v s=$$SERIAL_TIME -v c=$$CUDA_TIME "BEGIN {printf \"%.2f\", s/c}"); \
+	echo "OpenMP Speedup: $${OPENMP_SPEEDUP}x"; \
+	echo "CUDA Speedup:   $${CUDA_SPEEDUP}x"'
 	@mv output_serial.ppm output_simple_serial.ppm 2>/dev/null || true
 	@mv output_openmp.ppm output_simple_openmp.ppm 2>/dev/null || true
+	@mv output_cuda.ppm output_simple_cuda.ppm 2>/dev/null || true
 	@magick output_simple_serial.ppm output_simple_serial.png 2>/dev/null || true
 	@magick output_simple_openmp.ppm output_simple_openmp.png 2>/dev/null || true
+	@magick output_simple_cuda.ppm output_simple_cuda.png 2>/dev/null || true
 	@echo ""
 	@echo "--- Medium Scene ---"
 	@bash -c 'SERIAL_TIME=$$(./ray_serial scenes/medium.txt 2>/dev/null | grep "Serial time" | awk "{print \$$3}"); \
 	OPENMP_TIME=$$(./ray_openmp scenes/medium.txt 2>/dev/null | grep "OpenMP time" | awk "{print \$$3}"); \
+	CUDA_TIME=$$(./ray_cuda scenes/medium.txt 2>/dev/null | grep "GPU rendering time" | awk "{print \$$4}"); \
 	echo "Serial: $$SERIAL_TIME seconds"; \
 	echo "OpenMP: $$OPENMP_TIME seconds"; \
-	SPEEDUP=$$(awk -v s=$$SERIAL_TIME -v o=$$OPENMP_TIME "BEGIN {printf \"%.2f\", s/o}"); \
-	echo "Speedup: $${SPEEDUP}x"'
+	echo "CUDA:   $$CUDA_TIME seconds"; \
+	OPENMP_SPEEDUP=$$(awk -v s=$$SERIAL_TIME -v o=$$OPENMP_TIME "BEGIN {printf \"%.2f\", s/o}"); \
+	CUDA_SPEEDUP=$$(awk -v s=$$SERIAL_TIME -v c=$$CUDA_TIME "BEGIN {printf \"%.2f\", s/c}"); \
+	echo "OpenMP Speedup: $${OPENMP_SPEEDUP}x"; \
+	echo "CUDA Speedup:   $${CUDA_SPEEDUP}x"'
 	@mv output_serial.ppm output_medium_serial.ppm 2>/dev/null || true
 	@mv output_openmp.ppm output_medium_openmp.ppm 2>/dev/null || true
+	@mv output_cuda.ppm output_medium_cuda.ppm 2>/dev/null || true
 	@magick output_medium_serial.ppm output_medium_serial.png 2>/dev/null || true
 	@magick output_medium_openmp.ppm output_medium_openmp.png 2>/dev/null || true
+	@magick output_medium_cuda.ppm output_medium_cuda.png 2>/dev/null || true
 	@echo ""
 	@echo "--- Complex Scene ---"
 	@bash -c 'SERIAL_TIME=$$(./ray_serial scenes/complex.txt 2>/dev/null | grep "Serial time" | awk "{print \$$3}"); \
 	OPENMP_TIME=$$(./ray_openmp scenes/complex.txt 2>/dev/null | grep "OpenMP time" | awk "{print \$$3}"); \
+	CUDA_TIME=$$(./ray_cuda scenes/complex.txt 2>/dev/null | grep "GPU rendering time" | awk "{print \$$4}"); \
 	echo "Serial: $$SERIAL_TIME seconds"; \
 	echo "OpenMP: $$OPENMP_TIME seconds"; \
-	SPEEDUP=$$(awk -v s=$$SERIAL_TIME -v o=$$OPENMP_TIME "BEGIN {printf \"%.2f\", s/o}"); \
-	echo "Speedup: $${SPEEDUP}x"'
+	echo "CUDA:   $$CUDA_TIME seconds"; \
+	OPENMP_SPEEDUP=$$(awk -v s=$$SERIAL_TIME -v o=$$OPENMP_TIME "BEGIN {printf \"%.2f\", s/o}"); \
+	CUDA_SPEEDUP=$$(awk -v s=$$SERIAL_TIME -v c=$$CUDA_TIME "BEGIN {printf \"%.2f\", s/c}"); \
+	echo "OpenMP Speedup: $${OPENMP_SPEEDUP}x"; \
+	echo "CUDA Speedup:   $${CUDA_SPEEDUP}x"'
 	@mv output_serial.ppm output_complex_serial.ppm 2>/dev/null || true
 	@mv output_openmp.ppm output_complex_openmp.ppm 2>/dev/null || true
+	@mv output_cuda.ppm output_complex_cuda.ppm 2>/dev/null || true
 	@magick output_complex_serial.ppm output_complex_serial.png 2>/dev/null || true
 	@magick output_complex_openmp.ppm output_complex_openmp.png 2>/dev/null || true
+	@magick output_complex_cuda.ppm output_complex_cuda.png 2>/dev/null || true
 	@echo ""
 	@echo "=== Benchmark Complete ==="
