@@ -24,6 +24,7 @@ benchmark_results/
 # Logs and temp files
 *.log
 *.tmp
+*.ncu-rep
 
 # Ignore user/editor files
 .vscode/

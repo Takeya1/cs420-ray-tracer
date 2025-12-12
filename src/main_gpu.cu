@@ -556,6 +556,10 @@ int main(int argc, char* argv[]) {
     
     std::cout << "Scene: " << h_spheres.size() << " spheres, " 
               << h_lights.size() << " lights\n";
+    // =========================================================
+    // Start total time measurement
+    // =========================================================
+    auto total_start = std::chrono::high_resolution_clock::now();
     
     // Allocate device memory
     GPUSphere* d_spheres;
@@ -619,18 +623,25 @@ int main(int argc, char* argv[]) {
     CUDA_CHECK(cudaEventRecord(stop));
     CUDA_CHECK(cudaEventSynchronize(stop));
     
-    float milliseconds = 0;
-    CUDA_CHECK(cudaEventElapsedTime(&milliseconds, start, stop));
-    std::cout << "GPU rendering time: " << milliseconds / 1000.0f << " seconds\n";
+    float kernel_ms = 0;
+    CUDA_CHECK(cudaEventElapsedTime(&kernel_ms, start, stop));
+    std::cout << "GPU rendering time: " << kernel_ms / 1000.0f << " seconds\n";
     
     // Copy result back to host
     std::vector<float3> h_framebuffer(width * height);
     CUDA_CHECK(cudaMemcpy(h_framebuffer.data(), d_framebuffer,
                           width * height * sizeof(float3),
                           cudaMemcpyDeviceToHost));
-    
+    // =========================================================
+    // End total time measurement
+    // =========================================================
+    auto total_end = std::chrono::high_resolution_clock::now();
+    double total_time = std::chrono::duration<double>(total_end - total_start).count();
+    std::cout << "Gpu Kernel time:" << kernel_ms / 1000.0f << " seconds\n";
+    std::cout << "GPU total time: " << total_time << " seconds\n";
     // Write output
     write_ppm("output_gpu.ppm", h_framebuffer, width, height);
+    
     
     // Cleanup
     CUDA_CHECK(cudaFree(d_spheres));

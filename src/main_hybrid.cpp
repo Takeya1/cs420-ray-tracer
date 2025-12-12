@@ -1,35 +1,65 @@
 // main_hybrid.cpp - Week 3: Hybrid CPU-GPU Ray Tracer
 // CS420 Ray Tracer Project
-// Status: TEMPLATE - STUDENT MUST COMPLETE
 
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <vector>
 #include <chrono>
-#include <queue>
-#include <thread>
 #include <atomic>
+#include <algorithm>
 #include <cmath>
 
 #ifdef _OPENMP
 #include <omp.h>
 #endif
 
-#include "math_constants.h"
-#include "vec3.h"
-#include "ray.h"
-#include "camera.h"
-#include "sphere.h"
-#include "material.h"
-#include "scene.h"
-
-// CUDA runtime API (for hybrid execution)
 #include <cuda_runtime.h>
 
-// =========================================================
-// Image Output Functions
-// =========================================================
+#include "vec3.h"
+#include "ray.h"
+#include "sphere.h"
+#include "scene.h"
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+// =========================================================
+// Camera Class (if you don't have camera.h)
+// =========================================================
+class Camera {
+public:
+    Vec3 origin;
+    Vec3 lower_left_corner;
+    Vec3 horizontal;
+    Vec3 vertical;
+    
+    Camera(Vec3 lookfrom, Vec3 lookat, Vec3 vup, double vfov, double aspect) {
+        double theta = vfov * M_PI / 180.0;
+        double h = tan(theta / 2.0);
+        double viewport_height = 2.0 * h;
+        double viewport_width = aspect * viewport_height;
+        
+        Vec3 w = (lookfrom - lookat).normalized();
+        Vec3 u = cross(vup, w).normalized();
+        Vec3 v = cross(w, u);
+        
+        origin = lookfrom;
+        horizontal = u * viewport_width;
+        vertical = v * viewport_height;
+        lower_left_corner = origin - horizontal / 2.0 - vertical / 2.0 - w;
+    }
+    
+    Ray get_ray(double s, double t) const {
+        Vec3 direction = lower_left_corner + horizontal * s + vertical * t - origin;
+        return Ray(origin, direction.normalized());
+    }
+};
+
+// =========================================================
+// Image Output
+// =========================================================
 void write_ppm(const std::string& filename, const std::vector<Vec3>& framebuffer,
                int width, int height) {
     std::ofstream file(filename);
@@ -38,14 +68,14 @@ void write_ppm(const std::string& filename, const std::vector<Vec3>& framebuffer
         return;
     }
     
-    // PPM header
     file << "P3\n" << width << " " << height << "\n255\n";
     
-    // Write pixels (PPM is top-to-bottom)
     for (int j = height - 1; j >= 0; j--) {
         for (int i = 0; i < width; i++) {
-            int r, g, b;
-            framebuffer[j * width + i].to_rgb(r, g, b);
+            const Vec3& color = framebuffer[j * width + i];
+            int r = static_cast<int>(255.99 * std::min(1.0, std::max(0.0, color.x)));
+            int g = static_cast<int>(255.99 * std::min(1.0, std::max(0.0, color.y)));
+            int b = static_cast<int>(255.99 * std::min(1.0, std::max(0.0, color.z)));
             file << r << " " << g << " " << b << "\n";
         }
     }
@@ -55,150 +85,242 @@ void write_ppm(const std::string& filename, const std::vector<Vec3>& framebuffer
 }
 
 // =========================================================
-// Scene Creation (reuse from Week 1)
+// Scene Creation
 // =========================================================
 Scene create_test_scene() {
     Scene scene;
     
-    // Add spheres
-    scene.add_sphere(Sphere(Vec3(0, 0, -20), 2.0, 
-                           Material::diffuse(Vec3(1, 0, 0))));
-    scene.add_sphere(Sphere(Vec3(3, 0, -20), 2.0, 
-                           Material::metal(Vec3(0.8, 0.8, 0.8), 0.1)));
-    scene.add_sphere(Sphere(Vec3(-3, 0, -20), 2.0, 
-                           Material::diffuse(Vec3(0, 0, 1))));
-    scene.add_sphere(Sphere(Vec3(0, -102, -20), 100.0, 
-                           Material::diffuse(Vec3(0.5, 0.5, 0.5))));
+    // Red diffuse sphere (center)
+    scene.spheres.push_back(Sphere(
+        Vec3(0, 0, -20), 2.0,
+        {Vec3(1, 0, 0), 0.0, 32.0}  // color, reflectivity, shininess
+    ));
     
-    // Add lights
-    scene.add_light(Light(Vec3(10, 10, -10), Vec3(1, 1, 1), 0.7));
-    scene.add_light(Light(Vec3(-10, 10, -10), Vec3(1, 1, 0.8), 0.5));
+    // Silver metallic sphere (right)
+    scene.spheres.push_back(Sphere(
+        Vec3(3, 0, -20), 2.0,
+        {Vec3(0.8, 0.8, 0.8), 0.8, 100.0}
+    ));
     
-    // Set ambient
-    scene.set_ambient(Vec3(0.1, 0.1, 0.1));
+    // Blue diffuse sphere (left)
+    scene.spheres.push_back(Sphere(
+        Vec3(-3, 0, -20), 2.0,
+        {Vec3(0, 0, 1), 0.0, 32.0}
+    ));
+    
+    // Ground sphere
+    scene.spheres.push_back(Sphere(
+        Vec3(0, -102, -20), 100.0,
+        {Vec3(0.5, 0.5, 0.5), 0.0, 10.0}
+    ));
+    
+    // Lights
+    Light light1;
+    light1.position = Vec3(10, 10, -10);
+    light1.color = Vec3(1, 1, 1);
+    light1.intensity = 0.7;
+    scene.lights.push_back(light1);
+    
+    Light light2;
+    light2.position = Vec3(-10, 10, -10);
+    light2.color = Vec3(1, 1, 0.8);
+    light2.intensity = 0.5;
+    scene.lights.push_back(light2);
+    
+    scene.ambient_light = Vec3(0.1, 0.1, 0.1);
     
     return scene;
 }
 
 // =========================================================
-// Tile Structure for Work Distribution
+// Tile Structure
 // =========================================================
 struct Tile {
     int x_start, y_start;
     int x_end, y_end;
-    int complexity_estimate;  // Estimated work for this tile
+    int complexity_estimate;
     bool processed;
     
-    Tile(int xs, int ys, int xe, int ye) 
-        : x_start(xs), y_start(ys), x_end(xe), y_end(ye), 
+    Tile(int xs, int ys, int xe, int ye)
+        : x_start(xs), y_start(ys), x_end(xe), y_end(ye),
           complexity_estimate(0), processed(false) {}
     
-    int pixel_count() const {
-        return (x_end - x_start) * (y_end - y_start);
-    }
+    int width() const { return x_end - x_start; }
+    int height() const { return y_end - y_start; }
+    int pixel_count() const { return width() * height(); }
 };
 
 // =========================================================
-// GPU Kernel Declaration (implemented in kernel.cu)
+// GPU Structures (must match main_gpu.cu)
 // =========================================================
-extern "C" void launch_gpu_kernel(
-    float* d_framebuffer,
-    float* d_spheres, int num_spheres,
-    float* d_lights, int num_lights,
-    float* camera_params,
-    int tile_x, int tile_y, 
+struct GPUMaterial {
+    float3 albedo;
+    float metallic;
+    float roughness;
+    float shininess;
+};
+
+struct GPUSphere {
+    float3 center;
+    float radius;
+    GPUMaterial material;
+};
+
+struct GPULight {
+    float3 position;
+    float3 color;
+    float intensity;
+};
+
+struct GPUCamera {
+    float3 origin;
+    float3 lower_left;
+    float3 horizontal;
+    float3 vertical;
+};
+
+// =========================================================
+// GPU Kernel Declaration (from main_gpu.cu)
+// =========================================================
+extern "C" void launch_tile_kernel(
+    float3* d_framebuffer,
+    GPUSphere* d_spheres, int num_spheres,
+    GPULight* d_lights, int num_lights,
+    GPUCamera camera,
+    int tile_x, int tile_y,
     int tile_width, int tile_height,
     int image_width, int image_height,
-    int max_depth,
+    int max_bounces,
     cudaStream_t stream
 );
 
 // =========================================================
-// CPU Ray Tracing (Complex Shading Path)
+// CPU Ray Tracing
 // =========================================================
 Vec3 trace_ray_cpu(const Ray& ray, const Scene& scene, int depth) {
-    // TODO: STUDENT - Implement CPU ray tracing
-    // This should handle complex shading, deep reflections, etc.
-    // Can reuse code from Week 1
     if (depth <= 0) return Vec3(0, 0, 0);
     
     double t;
     int sphere_idx;
     
     if (!scene.find_intersection(ray, t, sphere_idx)) {
-        // Sky color gradient
-        double t = 0.5 * (ray.direction.y + 1.0);
-        return Vec3(1, 1, 1) * (1.0 - t) + Vec3(0.5, 0.7, 1.0) * t;
+        // Sky gradient
+        double blend = 0.5 * (ray.direction.y + 1.0);
+        return Vec3(1, 1, 1) * (1.0 - blend) + Vec3(0.5, 0.7, 1.0) * blend;
     }
-    // Calculate hit point
-    Vec3 hit_point = ray.at(t);
     
-    // Get the sphere and calculate normal
+    // Hit point and normal
+    Vec3 hit_point = ray.at(t);
     const Sphere& sphere = scene.spheres[sphere_idx];
     Vec3 normal = sphere.normal_at(hit_point);
-    
-    // Calculate view direction (from hit point to camera)
     Vec3 view_dir = (ray.origin - hit_point).normalized();
     
-    // Get material and calculate base color with shading
+    // Shading
     const Material& mat = sphere.material;
     Vec3 color = scene.shade(hit_point, normal, mat, view_dir);
     
-    // Handle reflections if material is reflective
-    if (mat.reflectivity > 0.0 && depth > 1) {
-        // Calculate reflection direction: R = I - 2*(I·N)*N
-        // where I is the incident direction (ray.direction)
+    // Reflections
+    if (mat.reflectivity > 0.001 && depth > 1) {
         Vec3 incident = ray.direction.normalized();
-        Vec3 reflect_dir = incident - normal * (2.0 * dot(incident, normal));
+        Vec3 reflect_dir = reflect(incident, normal);
         
-        // Offset reflection ray origin to avoid self-intersection
-        Vec3 offset_origin = hit_point + normal * EPSILON;
+        Vec3 offset_origin = hit_point + normal * 0.001;
         Ray reflect_ray(offset_origin, reflect_dir.normalized());
         
-        // Recursively trace reflection ray
-        Vec3 reflect_color = trace_ray(reflect_ray, scene, depth - 1);
-        
-        // Blend base color with reflection
+        Vec3 reflect_color = trace_ray_cpu(reflect_ray, scene, depth - 1);
         color = color * (1.0 - mat.reflectivity) + reflect_color * mat.reflectivity;
     }
     
-    // return color;
-    return scene.get_background(ray);
+    return color;
 }
 
 void process_tile_cpu(const Tile& tile, const Scene& scene, const Camera& camera,
                       std::vector<Vec3>& framebuffer, int width, int height, int max_depth) {
-    
     #pragma omp parallel for collapse(2) schedule(dynamic, 4)
     for (int y = tile.y_start; y < tile.y_end; y++) {
         for (int x = tile.x_start; x < tile.x_end; x++) {
-            Ray ray = camera.get_ray_pixel(x, y, width, height);
+            double u = double(x) / double(width);
+            double v = double(y) / double(height);
+            Ray ray = camera.get_ray(u, v);
             framebuffer[y * width + x] = trace_ray_cpu(ray, scene, max_depth);
         }
     }
 }
 
 // =========================================================
-// GPU Memory Management
+// Complexity Estimation
+// =========================================================
+int estimate_tile_complexity(const Tile& tile, const Scene& scene, 
+                             const Camera& camera, int width, int height) {
+    int complexity = 0;
+    const int STRIDE = 8;
+    
+    for (int y = tile.y_start; y < tile.y_end; y += STRIDE) {
+        for (int x = tile.x_start; x < tile.x_end; x += STRIDE) {
+            double u = double(x) / double(width);
+            double v = double(y) / double(height);
+            Ray ray = camera.get_ray(u, v);
+            
+            double t;
+            int sphere_idx;
+            if (scene.find_intersection(ray, t, sphere_idx)) {
+                complexity += 10;
+                if (scene.spheres[sphere_idx].material.reflectivity > 0.1) {
+                    complexity += 20;  // Reflections are expensive
+                }
+            } else {
+                complexity += 1;
+            }
+        }
+    }
+    
+    return complexity;
+}
+
+// =========================================================
+// GPU Resources Manager
 // =========================================================
 class GPUResources {
-private:
-    float* d_framebuffer;
-    float* d_spheres;
-    float* d_lights;
-    size_t fb_size;
-    size_t spheres_size;
-    size_t lights_size;
-    
 public:
-    GPUResources(int width, int height, int num_spheres, int num_lights) {
-        fb_size = width * height * 3 * sizeof(float);
-        spheres_size = num_spheres * 8 * sizeof(float); // center(3) + radius(1) + material(4)
-        lights_size = num_lights * 7 * sizeof(float);    // position(3) + color(3) + intensity(1)
+    float3* d_framebuffer;
+    GPUSphere* d_spheres;
+    GPULight* d_lights;
+    int num_spheres;
+    int num_lights;
+    
+    GPUResources(int width, int height, const Scene& scene) {
+        num_spheres = scene.spheres.size();
+        num_lights = scene.lights.size();
         
-        cudaMalloc(&d_framebuffer, fb_size);
-        cudaMalloc(&d_spheres, spheres_size);
-        cudaMalloc(&d_lights, lights_size);
+        cudaMalloc(&d_framebuffer, width * height * sizeof(float3));
+        cudaMalloc(&d_spheres, num_spheres * sizeof(GPUSphere));
+        cudaMalloc(&d_lights, num_lights * sizeof(GPULight));
+        
+        // Convert and upload spheres
+        std::vector<GPUSphere> gpu_spheres(num_spheres);
+        for (int i = 0; i < num_spheres; i++) {
+            const Sphere& s = scene.spheres[i];
+            gpu_spheres[i].center = make_float3(s.center.x, s.center.y, s.center.z);
+            gpu_spheres[i].radius = s.radius;
+            gpu_spheres[i].material.albedo = make_float3(
+                s.material.color.x, s.material.color.y, s.material.color.z);
+            gpu_spheres[i].material.metallic = s.material.reflectivity;
+            gpu_spheres[i].material.roughness = 1.0f - s.material.reflectivity;
+            gpu_spheres[i].material.shininess = s.material.shininess;
+        }
+        cudaMemcpy(d_spheres, gpu_spheres.data(), 
+                   num_spheres * sizeof(GPUSphere), cudaMemcpyHostToDevice);
+        
+        // Convert and upload lights
+        std::vector<GPULight> gpu_lights(num_lights);
+        for (int i = 0; i < num_lights; i++) {
+            const Light& l = scene.lights[i];
+            gpu_lights[i].position = make_float3(l.position.x, l.position.y, l.position.z);
+            gpu_lights[i].color = make_float3(l.color.x, l.color.y, l.color.z);
+            gpu_lights[i].intensity = l.intensity;
+        }
+        cudaMemcpy(d_lights, gpu_lights.data(),
+                   num_lights * sizeof(GPULight), cudaMemcpyHostToDevice);
     }
     
     ~GPUResources() {
@@ -207,46 +329,27 @@ public:
         cudaFree(d_lights);
     }
     
-    void upload_scene(const Scene& scene) {
-        // TODO: STUDENT - Convert scene data to GPU format and upload
-        // Pack spheres and lights into float arrays
+    void download_framebuffer(std::vector<float3>& buffer, int width, int height) {
+        cudaMemcpy(buffer.data(), d_framebuffer,
+                   width * height * sizeof(float3), cudaMemcpyDeviceToHost);
     }
-    
-    void download_tile(const Tile& tile, std::vector<Vec3>& framebuffer, 
-                      int width, cudaStream_t stream) {
-        // TODO: STUDENT - Download tile results from GPU to CPU framebuffer
-    }
-    
-    float* get_framebuffer() { return d_framebuffer; }
-    float* get_spheres() { return d_spheres; }
-    float* get_lights() { return d_lights; }
 };
 
-// =========================================================
-// Tile Complexity Estimation
-// =========================================================
-int estimate_tile_complexity(const Tile& tile, const Scene& scene, const Camera& camera) {
-    // TODO: STUDENT - Implement heuristic to estimate rendering complexity
-    // Consider:
-    // - Number of spheres likely to be intersected
-    // - Presence of reflective materials
-    // - Distance from camera
-    // Simple version: sample a few rays and count intersections
-    
-    return tile.pixel_count(); // Placeholder: just use pixel count
+GPUCamera convert_camera(const Camera& camera) {
+    GPUCamera gpu_cam;
+    gpu_cam.origin = make_float3(camera.origin.x, camera.origin.y, camera.origin.z);
+    gpu_cam.lower_left = make_float3(
+        camera.lower_left_corner.x, camera.lower_left_corner.y, camera.lower_left_corner.z);
+    gpu_cam.horizontal = make_float3(
+        camera.horizontal.x, camera.horizontal.y, camera.horizontal.z);
+    gpu_cam.vertical = make_float3(
+        camera.vertical.x, camera.vertical.y, camera.vertical.z);
+    return gpu_cam;
 }
 
 // =========================================================
-// TODO: STUDENT IMPLEMENTATION - Hybrid Work Distribution
+// Hybrid Rendering
 // =========================================================
-// Design and implement the work distribution strategy.
-// Decide which tiles go to CPU vs GPU based on:
-// - Complexity estimates
-// - Current workload
-// - Memory constraints
-// Use CUDA streams for overlapping computation
-// =========================================================
-
 void render_hybrid(const Scene& scene, const Camera& camera,
                    std::vector<Vec3>& framebuffer,
                    int width, int height, int max_depth,
@@ -267,55 +370,56 @@ void render_hybrid(const Scene& scene, const Camera& camera,
     std::cout << "Created " << tiles.size() << " tiles of size " 
               << tile_size << "x" << tile_size << std::endl;
     
-    // Estimate complexity for each tile
+    // Estimate complexity
     for (auto& tile : tiles) {
-        tile.complexity_estimate = estimate_tile_complexity(tile, scene, camera);
+        tile.complexity_estimate = estimate_tile_complexity(tile, scene, camera, width, height);
     }
     
-    // Initialize GPU resources
-    GPUResources gpu_resources(width, height, 
-                               scene.get_spheres().size(), 
-                               scene.get_lights().size());
-    gpu_resources.upload_scene(scene);
+    // Calculate threshold (average complexity)
+    double avg_complexity = 0;
+    for (const auto& tile : tiles) {
+        avg_complexity += tile.complexity_estimate;
+    }
+    avg_complexity /= tiles.size();
     
-    // Create CUDA streams for pipelining
-    const int NUM_STREAMS = 3;
+    // Partition tiles: complex → CPU, simple → GPU
+    std::vector<Tile*> cpu_tiles, gpu_tiles;
+    for (auto& tile : tiles) {
+        if (tile.complexity_estimate > avg_complexity * 1.3) {
+            cpu_tiles.push_back(&tile);
+        } else {
+            gpu_tiles.push_back(&tile);
+        }
+    }
+    
+    std::cout << "Distribution: " << cpu_tiles.size() << " tiles to CPU, "
+              << gpu_tiles.size() << " tiles to GPU" << std::endl;
+    
+    // Initialize GPU resources
+    GPUResources gpu(width, height, scene);
+    GPUCamera gpu_camera = convert_camera(camera);
+    
+    // Create CUDA streams
+    const int NUM_STREAMS = 4;
     cudaStream_t streams[NUM_STREAMS];
     for (int i = 0; i < NUM_STREAMS; i++) {
         cudaStreamCreate(&streams[i]);
     }
     
-    // TODO: STUDENT - Implement work distribution
-    // Split tiles between CPU and GPU based on complexity
-    std::queue<Tile*> cpu_queue;
-    std::queue<Tile*> gpu_queue;
-    
-    // Simple strategy: complex tiles to CPU, simple to GPU
-    int complexity_threshold = width * height / (tile_size * tile_size) * 2;
-    
-    for (auto& tile : tiles) {
-        if (tile.complexity_estimate > complexity_threshold) {
-            cpu_queue.push(&tile);
-        } else {
-            gpu_queue.push(&tile);
-        }
-    }
-    
-    std::cout << "Distribution: " << cpu_queue.size() << " tiles to CPU, "
-              << gpu_queue.size() << " tiles to GPU" << std::endl;
-    
     auto start = std::chrono::high_resolution_clock::now();
     
-    // TODO: STUDENT - Process tiles concurrently
-    // Use OpenMP sections or std::thread for CPU-GPU concurrency
+    // Thread-safe indices for work stealing
+    std::atomic<size_t> cpu_idx{0};
+    std::atomic<size_t> gpu_idx{0};
+    
     #pragma omp parallel sections
     {
         // CPU processing section
         #pragma omp section
         {
-            while (!cpu_queue.empty()) {
-                Tile* tile = cpu_queue.front();
-                cpu_queue.pop();
+            size_t idx;
+            while ((idx = cpu_idx.fetch_add(1)) < cpu_tiles.size()) {
+                Tile* tile = cpu_tiles[idx];
                 process_tile_cpu(*tile, scene, camera, framebuffer, width, height, max_depth);
                 tile->processed = true;
             }
@@ -324,22 +428,28 @@ void render_hybrid(const Scene& scene, const Camera& camera,
         // GPU processing section
         #pragma omp section
         {
+            size_t idx;
             int stream_idx = 0;
-            while (!gpu_queue.empty()) {
-                Tile* tile = gpu_queue.front();
-                gpu_queue.pop();
+            while ((idx = gpu_idx.fetch_add(1)) < gpu_tiles.size()) {
+                Tile* tile = gpu_tiles[idx];
                 
-                // TODO: STUDENT - Launch GPU kernel for this tile
-                // Use streams for asynchronous execution
-                cudaStream_t stream = streams[stream_idx];
-                stream_idx = (stream_idx + 1) % NUM_STREAMS;
-                
-                // launch_gpu_kernel(..., stream);
+                launch_tile_kernel(
+                    gpu.d_framebuffer,
+                    gpu.d_spheres, gpu.num_spheres,
+                    gpu.d_lights, gpu.num_lights,
+                    gpu_camera,
+                    tile->x_start, tile->y_start,
+                    tile->width(), tile->height(),
+                    width, height,
+                    max_depth,
+                    streams[stream_idx]
+                );
                 
                 tile->processed = true;
+                stream_idx = (stream_idx + 1) % NUM_STREAMS;
             }
             
-            // Wait for all GPU work to complete
+            // Wait for all GPU work
             for (int i = 0; i < NUM_STREAMS; i++) {
                 cudaStreamSynchronize(streams[i]);
             }
@@ -347,8 +457,21 @@ void render_hybrid(const Scene& scene, const Camera& camera,
     }
     
     auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> diff = end - start;
-    std::cout << "Hybrid rendering time: " << diff.count() << " seconds" << std::endl;
+    double elapsed = std::chrono::duration<double>(end - start).count();
+    std::cout << "Hybrid rendering time: " << elapsed << " seconds" << std::endl;
+    
+    // Download GPU results and merge into framebuffer
+    std::vector<float3> gpu_buffer(width * height);
+    gpu.download_framebuffer(gpu_buffer, width, height);
+    
+    for (const Tile* tile : gpu_tiles) {
+        for (int y = tile->y_start; y < tile->y_end; y++) {
+            for (int x = tile->x_start; x < tile->x_end; x++) {
+                int idx = y * width + x;
+                framebuffer[idx] = Vec3(gpu_buffer[idx].x, gpu_buffer[idx].y, gpu_buffer[idx].z);
+            }
+        }
+    }
     
     // Cleanup streams
     for (int i = 0; i < NUM_STREAMS; i++) {
@@ -366,60 +489,77 @@ void render_hybrid(const Scene& scene, const Camera& camera,
 }
 
 // =========================================================
-// Asynchronous Pipeline Version (Advanced)
+// Scene File Loading
 // =========================================================
-void render_hybrid_pipeline(const Scene& scene, const Camera& camera,
-                           std::vector<Vec3>& framebuffer,
-                           int width, int height, int max_depth) {
+void load_scene_file(const std::string& filename, Scene& scene) {
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Could not open scene file: " << filename << std::endl;
+        return;
+    }
     
-    std::cout << "Hybrid Pipeline Rendering..." << std::endl;
-    
-    // TODO: STUDENT - Implement pipelined version
-    // Stage 1: Tile generation and complexity estimation
-    // Stage 2: GPU kernel execution
-    // Stage 3: CPU processing
-    // Stage 4: Result aggregation
-    // Use pinned memory for faster transfers
-    
-    // Placeholder - calls basic hybrid version
-    render_hybrid(scene, camera, framebuffer, width, height, max_depth);
+    std::string line;
+    while (std::getline(file, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        
+        size_t start = line.find_first_not_of(" \t");
+        if (start == std::string::npos) continue;
+        line = line.substr(start);
+        
+        std::istringstream iss(line);
+        std::string type;
+        iss >> type;
+        
+        if (type == "sphere") {
+            double x, y, z, radius, r, g, b, metallic, roughness, shininess;
+            if (iss >> x >> y >> z >> radius >> r >> g >> b >> metallic >> roughness >> shininess) {
+                Material mat;
+                mat.color = Vec3(r, g, b);
+                mat.reflectivity = metallic;
+                mat.shininess = shininess;
+                scene.spheres.push_back(Sphere(Vec3(x, y, z), radius, mat));
+            }
+        } else if (type == "light") {
+            double x, y, z, r, g, b, intensity;
+            if (iss >> x >> y >> z >> r >> g >> b >> intensity) {
+                Light light;
+                light.position = Vec3(x, y, z);
+                light.color = Vec3(r, g, b);
+                light.intensity = intensity;
+                scene.lights.push_back(light);
+            }
+        }
+    }
 }
 
 // =========================================================
-// Main Function
+// Main
 // =========================================================
 int main(int argc, char* argv[]) {
     // Image settings
-    const int width = 1280;
-    const int height = 720;
+    const int width = 800;
+    const int height = 600;
     const int max_depth = 3;
-    const double aspect_ratio = double(width) / double(height);
-    
-    // Parse command line arguments
-    bool use_pipeline = false;
     int tile_size = 64;
+    std::string scene_file = "";
     std::string output_file = "output_hybrid.ppm";
     
+    // Parse arguments
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
-        if (arg == "--pipeline" || arg == "-p") {
-            use_pipeline = true;
-        } else if (arg == "--tile-size" || arg == "-t") {
-            if (i + 1 < argc) {
-                tile_size = std::atoi(argv[++i]);
-            }
-        } else if (arg == "--output" || arg == "-o") {
-            if (i + 1 < argc) {
-                output_file = argv[++i];
-            }
-        } else if (arg == "--help" || arg == "-h") {
-            std::cout << "Usage: " << argv[0] << " [options]\n";
-            std::cout << "Options:\n";
-            std::cout << "  --pipeline, -p        Use pipelined execution\n";
-            std::cout << "  --tile-size, -t SIZE  Set tile size (default: 64)\n";
-            std::cout << "  --output, -o FILE     Output filename\n";
-            std::cout << "  --help, -h            Show this help message\n";
+        if ((arg == "-t" || arg == "--tile-size") && i + 1 < argc) {
+            tile_size = std::atoi(argv[++i]);
+        } else if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+            output_file = argv[++i];
+        } else if (arg == "-h" || arg == "--help") {
+            std::cout << "Usage: " << argv[0] << " [scene_file] [options]\n"
+                      << "Options:\n"
+                      << "  -t, --tile-size SIZE   Set tile size (default: 64)\n"
+                      << "  -o, --output FILE      Output filename\n"
+                      << "  -h, --help             Show this help\n";
             return 0;
+        } else if (arg[0] != '-') {
+            scene_file = arg;
         }
     }
     
@@ -436,11 +576,23 @@ int main(int argc, char* argv[]) {
     std::cout << "Using GPU: " << props.name << std::endl;
     std::cout << "Tile size: " << tile_size << "x" << tile_size << std::endl;
     
-    // Create scene (can load from file or create programmatically)
-    Scene scene = create_test_scene();  // Reuse from Week 1
-    scene.print_stats();
+    // Create or load scene
+    Scene scene;
+    if (!scene_file.empty()) {
+        std::cout << "Loading scene from: " << scene_file << std::endl;
+        load_scene_file(scene_file, scene);
+    }
+    
+    if (scene.spheres.empty()) {
+        std::cout << "Using default test scene" << std::endl;
+        scene = create_test_scene();
+    }
+    
+    std::cout << "Scene: " << scene.spheres.size() << " spheres, "
+              << scene.lights.size() << " lights" << std::endl;
     
     // Setup camera
+    double aspect_ratio = double(width) / double(height);
     Vec3 lookfrom(0, 2, 5);
     Vec3 lookat(0, 0, -20);
     Vec3 vup(0, 1, 0);
@@ -452,42 +604,10 @@ int main(int argc, char* argv[]) {
     std::vector<Vec3> framebuffer(width * height);
     
     // Render
-    if (use_pipeline) {
-        render_hybrid_pipeline(scene, camera, framebuffer, width, height, max_depth);
-    } else {
-        render_hybrid(scene, camera, framebuffer, width, height, max_depth, tile_size);
-    }
+    render_hybrid(scene, camera, framebuffer, width, height, max_depth, tile_size);
     
     // Write output
     write_ppm(output_file, framebuffer, width, height);
-    
-    // Performance comparison
-    #ifdef COMPARE_MODES
-    std::cout << "\n=== Performance Comparison ===" << std::endl;
-    
-    // Run CPU-only with OpenMP
-    auto start = std::chrono::high_resolution_clock::now();
-    // ... CPU rendering ...
-    auto end = std::chrono::high_resolution_clock::now();
-    double cpu_time = std::chrono::duration<double>(end - start).count();
-    
-    // Run GPU-only
-    start = std::chrono::high_resolution_clock::now();
-    // ... GPU rendering ...
-    end = std::chrono::high_resolution_clock::now();
-    double gpu_time = std::chrono::duration<double>(end - start).count();
-    
-    // Run Hybrid
-    start = std::chrono::high_resolution_clock::now();
-    render_hybrid(scene, camera, framebuffer, width, height, max_depth, tile_size);
-    end = std::chrono::high_resolution_clock::now();
-    double hybrid_time = std::chrono::duration<double>(end - start).count();
-    
-    std::cout << "CPU-only time:    " << cpu_time << " seconds" << std::endl;
-    std::cout << "GPU-only time:    " << gpu_time << " seconds" << std::endl;
-    std::cout << "Hybrid time:      " << hybrid_time << " seconds" << std::endl;
-    std::cout << "Hybrid speedup over GPU: " << gpu_time / hybrid_time << "x" << std::endl;
-    #endif
     
     return 0;
 }
